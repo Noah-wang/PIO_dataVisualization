@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import threading
 from dataclasses import dataclass, field
-from io import StringIO
+from datetime import datetime, timezone
+from io import BytesIO, StringIO
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -14,6 +18,7 @@ from pio_platform.data_loader import DatasetBundle, list_workbook_sheets, load_d
 from pio_platform.profiling import build_column_profile, build_insights, compute_kpis
 
 
+# ── Role / group maps ─────────────────────────────────────────────────────────
 ROLE_LABELS = {
     "date": "Time",
     "brand": "Brand",
@@ -38,7 +43,14 @@ FIELD_GROUPS = {
 
 GROUP_ORDER = ["Time", "Vehicle", "Part", "Quantity", "Revenue", "Other"]
 
+# ── Persistence constants ─────────────────────────────────────────────────────
+MAX_WORKBOOKS = 20
+OUTPUTS_DIR = Path("outputs")
+OUTPUTS_DIR.mkdir(exist_ok=True)
+INDEX_FILE = OUTPUTS_DIR / "index.json"
 
+
+# ── Session store ─────────────────────────────────────────────────────────────
 @dataclass
 class WorkbookSession:
     workbook_id: str
@@ -48,6 +60,61 @@ class WorkbookSession:
     bundles: dict[str, DatasetBundle] = field(default_factory=dict)
 
 
+WORKBOOKS: dict[str, WorkbookSession] = {}
+# Values: "processing" | "ready" | "error"
+WORKBOOK_STATUS: dict[str, str] = {}
+
+
+# ── Index helpers ─────────────────────────────────────────────────────────────
+def _load_index() -> list[dict]:
+    if not INDEX_FILE.exists():
+        return []
+    try:
+        return json.loads(INDEX_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _save_index(entries: list[dict]) -> None:
+    INDEX_FILE.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _add_to_index(workbook_id: str, filename: str, sheet_names: list[str]) -> None:
+    entries = _load_index()
+    # Remove duplicate
+    entries = [e for e in entries if e["id"] != workbook_id]
+    entries.insert(0, {
+        "id": workbook_id,
+        "filename": filename,
+        "sheetNames": sheet_names,
+        "defaultSheet": sheet_names[0] if sheet_names else None,
+        "uploadedAt": datetime.now(timezone.utc).isoformat(),
+    })
+    # Evict oldest beyond MAX_WORKBOOKS
+    old = entries[MAX_WORKBOOKS:]
+    entries = entries[:MAX_WORKBOOKS]
+    for entry in old:
+        p = OUTPUTS_DIR / f"{entry['id']}.xlsx"
+        if p.exists():
+            p.unlink(missing_ok=True)
+    _save_index(entries)
+
+
+# ── Background processing ─────────────────────────────────────────────────────
+def _process_workbook_background(workbook_id: str) -> None:
+    """Process the default sheet in a background thread."""
+    try:
+        session = WORKBOOKS.get(workbook_id)
+        if not session:
+            WORKBOOK_STATUS[workbook_id] = "error"
+            return
+        _get_bundle(session, session.sheet_names[0])
+        WORKBOOK_STATUS[workbook_id] = "ready"
+    except Exception:
+        WORKBOOK_STATUS[workbook_id] = "error"
+
+
+# ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(title="PIO Demand Intelligence API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -62,12 +129,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-WORKBOOKS: dict[str, WorkbookSession] = {}
 
-
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/workbooks")
+def list_workbooks() -> list[dict[str, Any]]:
+    """Return the list of previously uploaded workbooks (from disk index)."""
+    return _load_index()
 
 
 @app.post("/api/workbooks/upload")
@@ -83,6 +155,11 @@ async def upload_workbook(file: UploadFile = File(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="The uploaded workbook does not contain any sheets.")
 
     workbook_id = uuid4().hex
+
+    # ── Phase 1: persist to disk and return immediately ───────────────────────
+    (OUTPUTS_DIR / f"{workbook_id}.xlsx").write_bytes(file_bytes)
+    _add_to_index(workbook_id, file.filename, sheet_names)
+
     session = WorkbookSession(
         workbook_id=workbook_id,
         filename=file.filename,
@@ -90,17 +167,70 @@ async def upload_workbook(file: UploadFile = File(...)) -> dict[str, Any]:
         sheet_names=sheet_names,
     )
     WORKBOOKS[workbook_id] = session
+    WORKBOOK_STATUS[workbook_id] = "processing"
 
-    default_sheet = sheet_names[0]
-    workspace = _build_workspace_payload(session, default_sheet, page=1, page_size=50)
+    # ── Phase 2: heavy processing in background thread ────────────────────────
+    thread = threading.Thread(
+        target=_process_workbook_background,
+        args=(workbook_id,),
+        daemon=True,
+    )
+    thread.start()
+
     return {
-        "workbook": {
-            "id": workbook_id,
-            "filename": file.filename,
-            "sheetNames": sheet_names,
-            "defaultSheet": default_sheet,
-        },
-        "workspace": workspace,
+        "workbookId": workbook_id,
+        "filename": file.filename,
+        "sheetNames": sheet_names,
+        "defaultSheet": sheet_names[0],
+    }
+
+
+@app.get("/api/workbooks/{workbook_id}/status")
+def get_workbook_status(workbook_id: str) -> dict[str, Any]:
+    """Poll processing status. Also restores sessions after backend restarts."""
+    status = WORKBOOK_STATUS.get(workbook_id)
+    session = WORKBOOKS.get(workbook_id)
+
+    if status and session:
+        return {
+            "status": status,
+            "filename": session.filename,
+            "sheetNames": session.sheet_names,
+            "defaultSheet": session.sheet_names[0] if session.sheet_names else None,
+        }
+
+    # Not in memory — try to restore from disk (e.g. after backend restart)
+    entries = _load_index()
+    entry = next((e for e in entries if e["id"] == workbook_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Workbook not found.")
+
+    out_file = OUTPUTS_DIR / f"{workbook_id}.xlsx"
+    if not out_file.exists():
+        raise HTTPException(status_code=404, detail="Workbook file not found on disk.")
+
+    file_bytes = out_file.read_bytes()
+    session = WorkbookSession(
+        workbook_id=workbook_id,
+        filename=entry["filename"],
+        file_bytes=file_bytes,
+        sheet_names=entry["sheetNames"],
+    )
+    WORKBOOKS[workbook_id] = session
+    WORKBOOK_STATUS[workbook_id] = "processing"
+
+    thread = threading.Thread(
+        target=_process_workbook_background,
+        args=(workbook_id,),
+        daemon=True,
+    )
+    thread.start()
+
+    return {
+        "status": "processing",
+        "filename": entry["filename"],
+        "sheetNames": entry["sheetNames"],
+        "defaultSheet": entry.get("defaultSheet"),
     }
 
 
@@ -186,10 +316,27 @@ def unhandled_exception(_: Any, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=500, content={"detail": str(exc)})
 
 
+# ── Session helpers ───────────────────────────────────────────────────────────
 def _get_session(workbook_id: str) -> WorkbookSession:
     session = WORKBOOKS.get(workbook_id)
-    if not session:
+    if session:
+        return session
+
+    # Try restoring from disk (backend restart case)
+    entries = _load_index()
+    entry = next((e for e in entries if e["id"] == workbook_id), None)
+    out_file = OUTPUTS_DIR / f"{workbook_id}.xlsx"
+    if not entry or not out_file.exists():
         raise HTTPException(status_code=404, detail="Workbook session not found.")
+
+    file_bytes = out_file.read_bytes()
+    session = WorkbookSession(
+        workbook_id=workbook_id,
+        filename=entry["filename"],
+        file_bytes=file_bytes,
+        sheet_names=entry["sheetNames"],
+    )
+    WORKBOOKS[workbook_id] = session
     return session
 
 
@@ -293,9 +440,7 @@ def _build_overview(
         f"Detected {health['mappedRoleCount']} business-ready fields for planning workflows.",
     ]
     if health["highMissingFields"]:
-        summary.append(
-            "Highest missing columns: " + ", ".join(health["highMissingFields"])
-        )
+        summary.append("Highest missing columns: " + ", ".join(health["highMissingFields"]))
 
     insights = build_insights(filtered_df, bundle.roles, bundle.date_candidates, "en")
 

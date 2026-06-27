@@ -3,6 +3,8 @@
 import {
   AreaChartOutlined,
   DatabaseOutlined,
+  FileExcelOutlined,
+  HistoryOutlined,
   PartitionOutlined,
   SearchOutlined,
   TableOutlined,
@@ -259,10 +261,20 @@ export default function Page() {
   const [workbook, setWorkbook] = useState<WorkbookMeta | null>(null);
   const [workspace, setWorkspace] = useState<WorkspacePayload | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState("Processing workbook\u2026");
   const [tableLoading, setTableLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [tableState, setTableState] = useState<TableState>(defaultTableState);
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
+  const [history, setHistory] = useState<Array<{ id: string; filename: string; sheetNames: string[]; defaultSheet: string | null; uploadedAt: string }>>([]);
+
+  // Load history on mount
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/workbooks`)
+      .then((r) => r.json())
+      .then(setHistory)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (workspace && visibleColumns.length === 0) {
@@ -270,10 +282,49 @@ export default function Page() {
     }
   }, [workspace, visibleColumns.length]);
 
+  /** Poll /status until ready, then load workspace */
+  async function pollUntilReady(workbookId: string, defaultSheet: string) {
+    return new Promise<void>((resolve, reject) => {
+      const msgs = [
+        "Parsing worksheet structure\u2026",
+        "Classifying fields\u2026",
+        "Computing KPI metrics\u2026",
+        "Building insights\u2026",
+      ];
+      let msgIdx = 0;
+      const msgTimer = setInterval(() => {
+        msgIdx = (msgIdx + 1) % msgs.length;
+        setLoadingMsg(msgs[msgIdx]);
+      }, 1800);
+
+      const poll = setInterval(async () => {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/workbooks/${workbookId}/status`);
+          if (!res.ok) { clearInterval(poll); clearInterval(msgTimer); reject(new Error("Status check failed.")); return; }
+          const data = await res.json();
+          if (data.status === "ready") {
+            clearInterval(poll);
+            clearInterval(msgTimer);
+            resolve();
+          } else if (data.status === "error") {
+            clearInterval(poll);
+            clearInterval(msgTimer);
+            reject(new Error("Processing failed on the server."));
+          }
+        } catch (e) {
+          clearInterval(poll);
+          clearInterval(msgTimer);
+          reject(e);
+        }
+      }, 1500);
+    });
+  }
+
   async function uploadWorkbook(file: File) {
     const formData = new FormData();
     formData.append("file", file);
     setLoading(true);
+    setLoadingMsg("Uploading file\u2026");
     try {
       const response = await fetch(`${API_BASE_URL}/api/workbooks/upload`, {
         method: "POST",
@@ -282,12 +333,15 @@ export default function Page() {
       if (!response.ok) {
         throw new Error((await response.json()).detail ?? "Upload failed.");
       }
-      const payload = (await response.json()) as { workbook: WorkbookMeta; workspace: WorkspacePayload };
-      setWorkbook(payload.workbook);
-      setWorkspace(payload.workspace);
-      setVisibleColumns(payload.workspace.table.defaultVisibleColumns);
+      const meta = await response.json() as { workbookId: string; filename: string; sheetNames: string[]; defaultSheet: string };
+      setLoadingMsg("Parsing worksheet structure\u2026");
+      await pollUntilReady(meta.workbookId, meta.defaultSheet);
+      setWorkbook({ id: meta.workbookId, filename: meta.filename, sheetNames: meta.sheetNames, defaultSheet: meta.defaultSheet });
+      await loadWorkspaceById(meta.workbookId, meta.defaultSheet, defaultTableState);
       setTableState(defaultTableState);
       setActiveTab("overview");
+      // Refresh history list
+      fetch(`${API_BASE_URL}/api/workbooks`).then((r) => r.json()).then(setHistory).catch(() => {});
       messageApi.success("Workbook loaded into the workspace.");
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : "Upload failed.");
@@ -295,6 +349,23 @@ export default function Page() {
       setLoading(false);
     }
     return false;
+  }
+
+  async function openFromHistory(entry: { id: string; filename: string; sheetNames: string[]; defaultSheet: string | null }) {
+    setLoading(true);
+    setLoadingMsg("Restoring workspace\u2026");
+    try {
+      await pollUntilReady(entry.id, entry.defaultSheet ?? entry.sheetNames[0]);
+      setWorkbook({ id: entry.id, filename: entry.filename, sheetNames: entry.sheetNames, defaultSheet: entry.defaultSheet ?? undefined });
+      await loadWorkspaceById(entry.id, entry.defaultSheet ?? entry.sheetNames[0], defaultTableState);
+      setTableState(defaultTableState);
+      setActiveTab("overview");
+      messageApi.success("Workspace restored.");
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : "Failed to restore workspace.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadWorkspace(nextSheetName: string, nextState: TableState, silent = false) {
@@ -325,6 +396,19 @@ export default function Page() {
         setTableLoading(false);
       }
     }
+  }
+
+  async function loadWorkspaceById(wbId: string, sheetName: string, nextState: TableState) {
+    const params = buildWorkspaceParams(nextState);
+    const response = await fetch(
+      `${API_BASE_URL}/api/workbooks/${wbId}/sheets/${encodeURIComponent(sheetName)}?${params.toString()}`
+    );
+    if (!response.ok) {
+      throw new Error((await response.json()).detail ?? "Failed to load workspace.");
+    }
+    const payload = (await response.json()) as WorkspacePayload;
+    setWorkspace(payload);
+    setVisibleColumns(payload.table.defaultVisibleColumns);
   }
 
   const uploadProps: UploadProps = {
@@ -415,44 +499,67 @@ export default function Page() {
             <span>Forecast-ready foundation</span>
           </div>
         </div>
-        <div className="hero-panel">
-          <div className="panel-topline">
-            <span>V1 Workspace</span>
-            <span>Upload a workbook to begin</span>
-          </div>
-          <Dragger {...uploadProps} className="upload-panel">
-            <p className="ant-upload-drag-icon">
-              <UploadOutlined />
-            </p>
-            <p className="upload-title">Drop an Excel workbook here</p>
-            <p className="upload-copy">Supports .xlsx and .xls. The source file remains unchanged.</p>
-          </Dragger>
-          <div className="panel-foot">
-            <div>
-              <span className="panel-metric">4</span>
-              <span className="panel-label">Tabs in V1</span>
+
+        {/* 右侧：四个功能卡片垂直堆叠，与左侧等高 */}
+        <div className="hero-right">
+          {capabilityCards.map((card) => (
+            <div key={card.title} className="hero-mini-card">
+              <div className="hero-mini-icon">{card.icon}</div>
+              <div>
+                <div className="hero-mini-title">{card.title}</div>
+                <div className="hero-mini-copy">{card.copy}</div>
+              </div>
             </div>
-            <div>
-              <span className="panel-metric">200k+</span>
-              <span className="panel-label">Rows handled with pagination</span>
-            </div>
-          </div>
+          ))}
         </div>
       </section>
 
-      <section className="capability-grid">
-        {capabilityCards.map((card) => (
-          <Card key={card.title} className="capability-card" variant="borderless">
-            <div className="capability-icon">{card.icon}</div>
-            <Title level={4}>{card.title}</Title>
-            <Paragraph>{card.copy}</Paragraph>
-          </Card>
-        ))}
-      </section>
+      {/* 上传框 */}
+      <div className="hero-upload-row">
+        <Dragger {...uploadProps} className="upload-panel upload-hero">
+          <p className="ant-upload-drag-icon">
+            <UploadOutlined />
+          </p>
+          <p className="upload-title">Drop an Excel workbook here</p>
+          <p className="upload-copy">Supports .xlsx and .xls. The source file remains unchanged.</p>
+        </Dragger>
+
+        {/* 历史文件列表 */}
+        {history.length > 0 && (
+          <div className="history-list">
+            <div className="history-header">
+              <HistoryOutlined />
+              <span>Recent files</span>
+            </div>
+            {history.map((entry) => (
+              <button
+                key={entry.id}
+                className="history-item"
+                onClick={() => openFromHistory(entry)}
+                disabled={loading}
+              >
+                <FileExcelOutlined className="history-file-icon" />
+                <div className="history-item-info">
+                  <span className="history-item-name">{entry.filename}</span>
+                  <span className="history-item-meta">
+                    {entry.sheetNames.length} sheet{entry.sheetNames.length > 1 ? "s" : ""}
+                    {" · "}
+                    {new Date(entry.uploadedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </span>
+                </div>
+                <span className="history-item-arrow">→</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <div className="loading-shell">
-          <Spin size="large" />
+          <div className="loading-card">
+            <Spin size="large" />
+            <p className="loading-msg">{loadingMsg}</p>
+          </div>
         </div>
       ) : null}
 
@@ -826,18 +933,7 @@ export default function Page() {
             ]}
           />
         </section>
-      ) : (
-        <section className="empty-state-shell">
-          <Card className="content-card empty-state-card">
-            <DatabaseOutlined className="empty-icon" />
-            <Title level={3}>Upload a workbook to activate the workspace</Title>
-            <Paragraph>
-              The V1 product starts with table clarity. Once a workbook is loaded, you will be able to inspect the
-              sheet, browse records with server-side pagination, classify fields, and view baseline KPI and chart output.
-            </Paragraph>
-          </Card>
-        </section>
-      )}
+      ) : null}
     </main>
   );
 }
