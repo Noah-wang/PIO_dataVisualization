@@ -71,6 +71,22 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Save custom column order to localStorage on change
+  useEffect(() => {
+    if (workspace && columnOrder.length > 0) {
+      const cacheKey = `col_order_${id}_${workspace.sheetName}`;
+      localStorage.setItem(cacheKey, JSON.stringify(columnOrder));
+    }
+  }, [columnOrder, workspace, id]);
+
+  // Save column visibility to localStorage on change
+  useEffect(() => {
+    if (workspace && visibleColumns.length > 0) {
+      const visibilityKey = `col_visibility_${id}_${workspace.sheetName}`;
+      localStorage.setItem(visibilityKey, JSON.stringify(visibleColumns));
+    }
+  }, [visibleColumns, workspace, id]);
+
   // Initial status check & polling
   useEffect(() => {
     let active = true;
@@ -160,8 +176,36 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
       setTableState(state);
       const isNewSheet = !workspace || workspace.sheetName !== payload.sheetName;
       if (isNewSheet || columnOrder.length === 0) {
-        setColumnOrder(payload.table.columns.map((c) => c.key));
-        setVisibleColumns(payload.table.columns.map((c) => c.key));
+        // Load custom column order from localStorage if available
+        const cacheKey = `col_order_${id}_${payload.sheetName}`;
+        const cachedOrder = localStorage.getItem(cacheKey);
+        if (cachedOrder) {
+          try {
+            const parsed = JSON.parse(cachedOrder) as string[];
+            const validColumns = parsed.filter((key) => payload.table.columns.some((c) => c.key === key));
+            const missingColumns = payload.table.columns.map((c) => c.key).filter((key) => !validColumns.includes(key));
+            setColumnOrder([...validColumns, ...missingColumns]);
+          } catch {
+            setColumnOrder(payload.table.columns.map((c) => c.key));
+          }
+        } else {
+          setColumnOrder(payload.table.columns.map((c) => c.key));
+        }
+
+        // Load column visibility from localStorage if available
+        const visibilityKey = `col_visibility_${id}_${payload.sheetName}`;
+        const cachedVisibility = localStorage.getItem(visibilityKey);
+        if (cachedVisibility) {
+          try {
+            const parsed = JSON.parse(cachedVisibility) as string[];
+            const validVisibility = parsed.filter((key) => payload.table.columns.some((c) => c.key === key));
+            setVisibleColumns(validVisibility);
+          } catch {
+            setVisibleColumns(payload.table.columns.map((c) => c.key));
+          }
+        } else {
+          setVisibleColumns(payload.table.columns.map((c) => c.key));
+        }
       }
     } catch (err) {
       messageApi.error(err instanceof Error ? err.message : "Failed to load worksheet data.");
