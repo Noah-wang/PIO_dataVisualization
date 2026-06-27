@@ -433,7 +433,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         <Select
                           mode="multiple"
                           allowClear
-                          maxTagCount={1}
+                          maxTagCount="responsive"
                           placeholder={workspace.roles.brand ? `Brand (${workspace.roles.brand})` : "Brand"}
                           optionFilterProp="label"
                           popupMatchSelectWidth={false}
@@ -447,7 +447,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         <Select
                           mode="multiple"
                           allowClear
-                          maxTagCount={1}
+                          maxTagCount="responsive"
                           placeholder={workspace.roles.model ? `Model (${workspace.roles.model})` : "Model"}
                           optionFilterProp="label"
                           showSearch
@@ -462,7 +462,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         <Select
                           mode="multiple"
                           allowClear
-                          maxTagCount={1}
+                          maxTagCount="responsive"
                           placeholder={workspace.roles.model_year ? `Model year (${workspace.roles.model_year})` : "Model year"}
                           optionFilterProp="label"
                           popupMatchSelectWidth={false}
@@ -476,7 +476,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         <Select
                           mode="multiple"
                           allowClear
-                          maxTagCount={1}
+                          maxTagCount="responsive"
                           placeholder={
                             workspace.roles.part_description || workspace.roles.part_number
                               ? `Part (${workspace.roles.part_description || workspace.roles.part_number})`
@@ -511,7 +511,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           className="visible-columns-select"
                           value={visibleColumns}
-                          maxTagCount={2}
+                          maxTagCount="responsive"
                           placeholder="Visible columns"
                           popupMatchSelectWidth={false}
                           optionLabelProp="tagLabel"
