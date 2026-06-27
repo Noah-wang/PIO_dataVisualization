@@ -303,17 +303,28 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
           title: (
             <div className="column-heading">
               <span style={{ fontWeight: 600 }}>{hasRole ? column.role : column.title}</span>
+              {hasRole ? (
+                <Text type="secondary" style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 400 }}>
+                  {column.title}
+                </Text>
+              ) : null}
             </div>
           ),
           dataIndex: column.key,
           key: column.key,
+          sorter: true,
           width: (() => {
             const roleOrTitle = column.role || column.title;
             if (
               roleOrTitle === "Brand" ||
               roleOrTitle === "Series" ||
               column.key === "PIS_CMP_KND" ||
-              column.key === "PIS_SERI" ||
+              column.key === "PIS_SERI"
+            ) {
+              return 85;
+            }
+            if (
+              roleOrTitle === "Model year" ||
               column.key === "PIS_MDL_YY" ||
               column.type === "year"
             ) {
