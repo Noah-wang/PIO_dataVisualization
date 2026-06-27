@@ -494,6 +494,12 @@ def _build_workspace_payload(
     }
 
 
+def _get_column_profile(bundle: DatasetBundle) -> pd.DataFrame:
+    if not hasattr(bundle, "_cached_column_profile"):
+        bundle._cached_column_profile = build_column_profile(bundle.dataframe, bundle.date_candidates)
+    return bundle._cached_column_profile
+
+
 def _build_overview(
     filename: str,
     sheet_name: str,
@@ -501,7 +507,7 @@ def _build_overview(
     filtered_df: pd.DataFrame,
 ) -> dict[str, Any]:
     kpis = compute_kpis(filtered_df, bundle.roles)
-    profile_df = build_column_profile(bundle.dataframe, bundle.date_candidates)
+    profile_df = _get_column_profile(bundle)
     health = {
         "dateFieldCount": len(bundle.date_fields),
         "numericFieldCount": len(bundle.numeric_fields),
@@ -533,8 +539,9 @@ def _build_overview(
 
 def _build_field_classification(bundle: DatasetBundle) -> dict[str, list[dict[str, Any]]]:
     inverse_roles = {column: role for role, column in bundle.roles.items()}
-    profile_df = build_column_profile(bundle.dataframe, bundle.date_candidates)
+    profile_df = _get_column_profile(bundle)
     groups: dict[str, list[dict[str, Any]]] = {group: [] for group in GROUP_ORDER}
+
 
     for row in profile_df.to_dict("records"):
         column = row["Column"]
