@@ -509,14 +509,21 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         />
                         <Select
                           mode="multiple"
+                          className="visible-columns-select"
                           value={visibleColumns}
                           maxTagCount={2}
                           placeholder="Visible columns"
                           popupMatchSelectWidth={false}
-                          options={workspace.table.columns.map((column) => ({
-                            label: column.title,
-                            value: column.key,
-                          }))}
+                          optionLabelProp="tagLabel"
+                          options={workspace.table.columns.map((column) => {
+                            const label = column.role ? `${column.role} (${column.title})` : column.title;
+                            const tagLabel = column.role || column.title;
+                            return {
+                              label: label,
+                              value: column.key,
+                              tagLabel: tagLabel,
+                            };
+                          })}
                           onChange={setVisibleColumns}
                         />
                         <Button

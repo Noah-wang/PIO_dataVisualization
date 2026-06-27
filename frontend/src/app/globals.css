@@ -456,6 +456,11 @@ a {
   min-width: 120px;
 }
 
+.toolbar-grid .visible-columns-select {
+  flex: 2 1 320px;
+  max-width: 480px;
+}
+
 .column-heading {
   display: flex;
   flex-direction: column;
