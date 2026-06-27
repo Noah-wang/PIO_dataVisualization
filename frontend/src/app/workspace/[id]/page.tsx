@@ -408,6 +408,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           maxTagCount={1}
                           placeholder="Brand"
                           optionFilterProp="label"
+                          popupMatchSelectWidth={false}
                           value={tableState.brand}
                           options={workspace.filterOptions.brand.map((option) => ({
                             label: `${option.label} (${option.count.toLocaleString()})`,
@@ -422,6 +423,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           placeholder="Model"
                           optionFilterProp="label"
                           showSearch
+                          popupMatchSelectWidth={false}
                           value={tableState.model}
                           options={workspace.filterOptions.model.map((option) => ({
                             label: `${option.label} (${option.count.toLocaleString()})`,
@@ -435,6 +437,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           maxTagCount={1}
                           placeholder="Model year"
                           optionFilterProp="label"
+                          popupMatchSelectWidth={false}
                           value={tableState.modelYear}
                           options={workspace.filterOptions.modelYear.map((option) => ({
                             label: `${option.label} (${option.count.toLocaleString()})`,
@@ -449,6 +452,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           placeholder="Part"
                           optionFilterProp="label"
                           showSearch
+                          popupMatchSelectWidth={false}
                           value={tableState.part}
                           options={workspace.filterOptions.part.map((option) => ({
                             label: `${option.label} (${option.count.toLocaleString()})`,
@@ -477,6 +481,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           value={visibleColumns}
                           maxTagCount={2}
                           placeholder="Visible columns"
+                          popupMatchSelectWidth={false}
                           options={workspace.table.columns.map((column) => ({
                             label: column.title,
                             value: column.key,

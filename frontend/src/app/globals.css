@@ -437,9 +437,23 @@ a {
 }
 
 .toolbar-grid {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr 1.2fr 0.9fr 1.4fr 1.2fr auto auto;
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.toolbar-grid > * {
+  flex: 1 1 200px;
+}
+
+.toolbar-grid .ant-picker {
+  flex: 1.2 1 280px;
+}
+
+.toolbar-grid .ant-btn {
+  flex: 0 0 auto;
+  min-width: 120px;
 }
 
 .column-heading {
@@ -669,9 +683,6 @@ a {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .toolbar-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 900px) {
@@ -690,7 +701,6 @@ a {
     justify-content: space-between;
   }
 
-  .toolbar-grid,
   .health-grid,
   .panel-foot {
     grid-template-columns: 1fr;
