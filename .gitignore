@@ -1,0 +1,42 @@
+# ── Python ──────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Environment / secrets ────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Next.js / Node ───────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+
+# ── OS / editor ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ── Outputs / uploads (runtime data) ────────────────────
+outputs/
+
+# ── Work / scratch / dev notes ──────────────────────────
+work/
+
+# ── Playwright CLI session logs ──────────────────────────
+.playwright-cli/
+
+# ── Streamlit config ────────────────────────────────────
+.streamlit/
+work/awesome-design-md/

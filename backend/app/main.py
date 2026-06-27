@@ -1,0 +1,666 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from io import StringIO
+from typing import Any
+from uuid import uuid4
+
+import pandas as pd
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from pio_platform.data_loader import DatasetBundle, list_workbook_sheets, load_dataset
+from pio_platform.profiling import build_column_profile, build_insights, compute_kpis
+
+
+ROLE_LABELS = {
+    "date": "Time",
+    "brand": "Brand",
+    "model": "Vehicle model",
+    "model_year": "Model year",
+    "part_number": "Part number",
+    "part_description": "Part description",
+    "installation_quantity": "Installation quantity",
+    "revenue": "Revenue",
+}
+
+FIELD_GROUPS = {
+    "date": "Time",
+    "brand": "Vehicle",
+    "model": "Vehicle",
+    "model_year": "Vehicle",
+    "part_number": "Part",
+    "part_description": "Part",
+    "installation_quantity": "Quantity",
+    "revenue": "Revenue",
+}
+
+GROUP_ORDER = ["Time", "Vehicle", "Part", "Quantity", "Revenue", "Other"]
+
+
+@dataclass
+class WorkbookSession:
+    workbook_id: str
+    filename: str
+    file_bytes: bytes
+    sheet_names: list[str]
+    bundles: dict[str, DatasetBundle] = field(default_factory=dict)
+
+
+app = FastAPI(title="PIO Demand Intelligence API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:3001",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+WORKBOOKS: dict[str, WorkbookSession] = {}
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/api/workbooks/upload")
+async def upload_workbook(file: UploadFile = File(...)) -> dict[str, Any]:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A workbook filename is required.")
+    if not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Only .xlsx and .xls files are supported.")
+
+    file_bytes = await file.read()
+    sheet_names = list_workbook_sheets(file_bytes)
+    if not sheet_names:
+        raise HTTPException(status_code=400, detail="The uploaded workbook does not contain any sheets.")
+
+    workbook_id = uuid4().hex
+    session = WorkbookSession(
+        workbook_id=workbook_id,
+        filename=file.filename,
+        file_bytes=file_bytes,
+        sheet_names=sheet_names,
+    )
+    WORKBOOKS[workbook_id] = session
+
+    default_sheet = sheet_names[0]
+    workspace = _build_workspace_payload(session, default_sheet, page=1, page_size=50)
+    return {
+        "workbook": {
+            "id": workbook_id,
+            "filename": file.filename,
+            "sheetNames": sheet_names,
+            "defaultSheet": default_sheet,
+        },
+        "workspace": workspace,
+    }
+
+
+@app.get("/api/workbooks/{workbook_id}/sheets/{sheet_name}")
+def get_workspace(
+    workbook_id: str,
+    sheet_name: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=200),
+    search: str = Query(default=""),
+    brand: list[str] = Query(default=[]),
+    model: list[str] = Query(default=[]),
+    model_year: list[str] = Query(default=[]),
+    part: list[str] = Query(default=[]),
+    model_query: str = Query(default=""),
+    part_query: str = Query(default=""),
+    sort_field: str = Query(default=""),
+    sort_order: str = Query(default=""),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+) -> dict[str, Any]:
+    session = _get_session(workbook_id)
+    return _build_workspace_payload(
+        session,
+        sheet_name,
+        page=page,
+        page_size=page_size,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        part=part,
+        model_query=model_query,
+        part_query=part_query,
+        sort_field=sort_field,
+        sort_order=sort_order,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@app.get("/api/workbooks/{workbook_id}/sheets/{sheet_name}/export.csv")
+def export_filtered_csv(
+    workbook_id: str,
+    sheet_name: str,
+    search: str = Query(default=""),
+    brand: list[str] = Query(default=[]),
+    model: list[str] = Query(default=[]),
+    model_year: list[str] = Query(default=[]),
+    part: list[str] = Query(default=[]),
+    model_query: str = Query(default=""),
+    part_query: str = Query(default=""),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+) -> StreamingResponse:
+    session = _get_session(workbook_id)
+    bundle = _get_bundle(session, sheet_name)
+    filtered = _apply_filters(
+        bundle,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        part=part,
+        model_query=model_query,
+        part_query=part_query,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    output = StringIO()
+    filtered.to_csv(output, index=False)
+    output.seek(0)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{session.filename.rsplit(".", 1)[0]}-{sheet_name}.csv"'
+    }
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
+@app.exception_handler(Exception)
+def unhandled_exception(_: Any, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+
+def _get_session(workbook_id: str) -> WorkbookSession:
+    session = WORKBOOKS.get(workbook_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Workbook session not found.")
+    return session
+
+
+def _get_bundle(session: WorkbookSession, sheet_name: str) -> DatasetBundle:
+    if sheet_name not in session.sheet_names:
+        raise HTTPException(status_code=404, detail="Sheet not found in workbook.")
+    if sheet_name not in session.bundles:
+        session.bundles[sheet_name] = load_dataset(session.file_bytes, sheet_name, header_mode="Auto detect")
+    return session.bundles[sheet_name]
+
+
+def _build_workspace_payload(
+    session: WorkbookSession,
+    sheet_name: str,
+    page: int,
+    page_size: int,
+    search: str = "",
+    brand: list[str] | None = None,
+    model: list[str] | None = None,
+    model_year: list[str] | None = None,
+    part: list[str] | None = None,
+    model_query: str = "",
+    part_query: str = "",
+    sort_field: str = "",
+    sort_order: str = "",
+    start_date: str = "",
+    end_date: str = "",
+) -> dict[str, Any]:
+    bundle = _get_bundle(session, sheet_name)
+    if bundle.dataframe.empty:
+        raise HTTPException(status_code=400, detail="The selected worksheet does not contain a usable dataset.")
+
+    filtered = _apply_filters(
+        bundle,
+        search=search,
+        brand=brand or [],
+        model=model or [],
+        model_year=model_year or [],
+        part=part or [],
+        model_query=model_query,
+        part_query=part_query,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    page_data = _build_table_page(
+        bundle=bundle,
+        filtered_df=filtered,
+        page=page,
+        page_size=page_size,
+        sort_field=sort_field,
+        sort_order=sort_order,
+    )
+    return {
+        "workbook": {
+            "id": session.workbook_id,
+            "filename": session.filename,
+            "sheetNames": session.sheet_names,
+        },
+        "sheetName": sheet_name,
+        "profile": bundle.profile,
+        "roles": bundle.roles,
+        "overview": _build_overview(session.filename, sheet_name, bundle, filtered),
+        "table": page_data,
+        "classification": _build_field_classification(bundle),
+        "insights": _build_chart_payloads(bundle, filtered),
+        "filters": {
+            "search": search,
+            "brand": brand or [],
+            "model": model or [],
+            "modelYear": model_year or [],
+            "part": part or [],
+            "modelQuery": model_query,
+            "partQuery": part_query,
+            "startDate": start_date,
+            "endDate": end_date,
+        },
+        "filterOptions": _build_filter_options(bundle),
+    }
+
+
+def _build_overview(
+    filename: str,
+    sheet_name: str,
+    bundle: DatasetBundle,
+    filtered_df: pd.DataFrame,
+) -> dict[str, Any]:
+    kpis = compute_kpis(filtered_df, bundle.roles)
+    profile_df = build_column_profile(bundle.dataframe, bundle.date_candidates)
+    health = {
+        "dateFieldCount": len(bundle.date_fields),
+        "numericFieldCount": len(bundle.numeric_fields),
+        "categoryFieldCount": len(bundle.categorical_fields),
+        "mappedRoleCount": len(bundle.roles),
+        "highMissingFields": profile_df[profile_df["Missing %"] >= 20]["Column"].head(3).tolist(),
+    }
+
+    date_summary = _date_summary(bundle, filtered_df)
+    summary = [
+        f"{filename} / {sheet_name} has {bundle.profile['row_count']:,} rows across {bundle.profile['column_count']} columns.",
+        date_summary,
+        f"Detected {health['mappedRoleCount']} business-ready fields for planning workflows.",
+    ]
+    if health["highMissingFields"]:
+        summary.append(
+            "Highest missing columns: " + ", ".join(health["highMissingFields"])
+        )
+
+    insights = build_insights(filtered_df, bundle.roles, bundle.date_candidates, "en")
+
+    return {
+        "datasetTitle": filename,
+        "sheetName": sheet_name,
+        "kpis": kpis,
+        "summary": summary,
+        "health": health,
+        "autoInsights": insights,
+    }
+
+
+def _build_field_classification(bundle: DatasetBundle) -> dict[str, list[dict[str, Any]]]:
+    inverse_roles = {column: role for role, column in bundle.roles.items()}
+    profile_df = build_column_profile(bundle.dataframe, bundle.date_candidates)
+    groups: dict[str, list[dict[str, Any]]] = {group: [] for group in GROUP_ORDER}
+
+    for row in profile_df.to_dict("records"):
+        column = row["Column"]
+        role = inverse_roles.get(column)
+        group = _resolve_group(column, role, bundle)
+        confidence = "High" if role else "Medium" if group != "Other" else "Low"
+        groups[group].append(
+            {
+                "column": column,
+                "group": group,
+                "detectedRole": ROLE_LABELS.get(role, "Supporting field"),
+                "confidence": confidence,
+                "type": row["Type"],
+                "missingPct": row["Missing %"],
+                "uniqueCount": row["Unique"],
+                "sampleValues": row["Sample Values"],
+            }
+        )
+
+    return {group: groups[group] for group in GROUP_ORDER if groups[group]}
+
+
+def _resolve_group(column: str, role: str | None, bundle: DatasetBundle) -> str:
+    if role and role in FIELD_GROUPS:
+        return FIELD_GROUPS[role]
+    if column in bundle.date_fields:
+        return "Time"
+    if column in bundle.numeric_fields:
+        return "Other"
+    lowered = column.lower()
+    if "model" in lowered or "brand" in lowered:
+        return "Vehicle"
+    if "part" in lowered or "desc" in lowered:
+        return "Part"
+    return "Other"
+
+
+def _build_chart_payloads(bundle: DatasetBundle, filtered_df: pd.DataFrame) -> dict[str, Any]:
+    charts: dict[str, Any] = {}
+    date_col = bundle.roles.get("date")
+    qty_col = bundle.roles.get("installation_quantity")
+    revenue_col = bundle.roles.get("revenue")
+    model_col = bundle.roles.get("model")
+    part_col = bundle.roles.get("part_description") or bundle.roles.get("part_number")
+
+    if date_col and date_col in bundle.date_candidates and qty_col and qty_col in filtered_df.columns:
+        charts["monthlyInstallation"] = _monthly_chart(
+            bundle.date_candidates[date_col].loc[filtered_df.index],
+            filtered_df[qty_col],
+            qty_col,
+        )
+
+    if date_col and date_col in bundle.date_candidates and revenue_col and revenue_col in filtered_df.columns:
+        charts["monthlyRevenue"] = _monthly_chart(
+            bundle.date_candidates[date_col].loc[filtered_df.index],
+            filtered_df[revenue_col],
+            revenue_col,
+        )
+
+    if model_col and revenue_col and model_col in filtered_df.columns and revenue_col in filtered_df.columns:
+        top_models = (
+            filtered_df.groupby(model_col, dropna=True)[revenue_col]
+            .sum()
+            .sort_values(ascending=False)
+            .head(10)
+        )
+        charts["topModels"] = {
+            "title": "Top vehicle models by revenue",
+            "labels": [str(index) for index in top_models.index.tolist()],
+            "values": [float(value) for value in top_models.tolist()],
+        }
+
+    metric_col = revenue_col if revenue_col and revenue_col in filtered_df.columns else qty_col
+    if part_col and metric_col and part_col in filtered_df.columns:
+        top_parts = (
+            filtered_df.groupby(part_col, dropna=True)[metric_col]
+            .sum()
+            .sort_values(ascending=False)
+            .head(12)
+        )
+        charts["topParts"] = {
+            "title": f"Top parts by {'revenue' if metric_col == revenue_col else 'installation quantity'}",
+            "labels": [str(index) for index in top_parts.index.tolist()],
+            "values": [float(value) for value in top_parts.tolist()],
+        }
+
+    return charts
+
+
+def _monthly_chart(date_series: pd.Series, value_series: pd.Series, metric_name: str) -> dict[str, Any]:
+    chart_df = pd.DataFrame(
+        {"month": date_series.dt.to_period("M").dt.to_timestamp(), metric_name: value_series}
+    )
+    chart_df = chart_df.groupby("month", dropna=True)[metric_name].sum().reset_index()
+    return {
+        "title": metric_name,
+        "labels": [value.strftime("%Y-%m") for value in chart_df["month"].tolist()],
+        "values": [float(value) for value in chart_df[metric_name].tolist()],
+    }
+
+
+def _build_table_page(
+    bundle: DatasetBundle,
+    filtered_df: pd.DataFrame,
+    page: int,
+    page_size: int,
+    sort_field: str,
+    sort_order: str,
+) -> dict[str, Any]:
+    working = filtered_df.copy()
+    model_year_col = bundle.roles.get("model_year")
+    if sort_field and sort_field in working.columns:
+        ascending = sort_order not in {"descend", "desc"}
+        if sort_field in bundle.date_fields:
+            sorter = bundle.date_candidates[sort_field].loc[working.index]
+            working = working.assign(__sorter=sorter).sort_values(
+                by="__sorter", ascending=ascending, na_position="last", kind="mergesort"
+            )
+            working = working.drop(columns="__sorter")
+        else:
+            working = working.sort_values(by=sort_field, ascending=ascending, na_position="last", kind="mergesort")
+
+    total_rows = len(working)
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_df = working.iloc[start:end].copy()
+
+    columns = []
+    default_visible = []
+    inverse_roles = {column: role for role, column in bundle.roles.items()}
+
+    for column in working.columns:
+        role = inverse_roles.get(column)
+        columns.append(
+            {
+                "key": column,
+                "title": column,
+                "role": ROLE_LABELS.get(role, ""),
+                "type": "year" if column == model_year_col else "date" if column in bundle.date_fields else _dtype_name(working[column]),
+            }
+        )
+        if role or len(default_visible) < 8:
+            default_visible.append(column)
+
+    rows = []
+    for row_index, (_, row) in enumerate(page_df.iterrows()):
+        serialized = {"id": start + row_index}
+        for column in page_df.columns:
+            parsed_date = None
+            if column in bundle.date_candidates:
+                parsed_date = bundle.date_candidates[column].loc[row.name]
+            serialized[column] = _serialize_cell(
+                row[column],
+                date_fields=bundle.date_fields,
+                column=column,
+                parsed_date=parsed_date,
+                model_year_col=model_year_col,
+            )
+        rows.append(serialized)
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "totalRows": total_rows,
+        "page": page,
+        "pageSize": page_size,
+        "defaultVisibleColumns": default_visible,
+    }
+
+
+def _apply_filters(
+    bundle: DatasetBundle,
+    search: str,
+    brand: list[str],
+    model: list[str],
+    model_year: list[str],
+    part: list[str],
+    model_query: str,
+    part_query: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    df = bundle.dataframe
+    mask = pd.Series(True, index=df.index)
+
+    date_col = bundle.roles.get("date")
+    if date_col and date_col in bundle.date_candidates:
+        parsed = bundle.date_candidates[date_col]
+        if start_date:
+            mask &= parsed >= pd.to_datetime(start_date, errors="coerce")
+        if end_date:
+            mask &= parsed <= pd.to_datetime(end_date, errors="coerce")
+
+    brand_col = bundle.roles.get("brand")
+    if brand and brand_col and brand_col in df.columns:
+        mask &= df[brand_col].fillna("").astype(str).isin(brand)
+
+    model_col = bundle.roles.get("model")
+    if model and model_col and model_col in df.columns:
+        mask &= df[model_col].fillna("").astype(str).isin(model)
+    if model_query and model_col and model_col in df.columns:
+        mask &= df[model_col].fillna("").astype(str).str.contains(model_query, case=False, regex=False)
+
+    model_year_col = bundle.roles.get("model_year")
+    if model_year and model_year_col and model_year_col in df.columns:
+        year_series = _display_series_for_column(bundle, model_year_col)
+        mask &= year_series.isin(model_year)
+
+    part_col = bundle.roles.get("part_description") or bundle.roles.get("part_number")
+    if part and part_col and part_col in df.columns:
+        mask &= df[part_col].fillna("").astype(str).isin(part)
+    if part_query and part_col and part_col in df.columns:
+        mask &= df[part_col].fillna("").astype(str).str.contains(part_query, case=False, regex=False)
+
+    if search:
+        search_columns = list(dict.fromkeys(
+            [
+                column
+                for column in [
+                    bundle.roles.get("brand"),
+                    bundle.roles.get("model"),
+                    bundle.roles.get("part_number"),
+                    bundle.roles.get("part_description"),
+                ]
+                if column and column in df.columns
+            ] + bundle.categorical_fields[:6]
+        ))
+        tokens = [token.strip().lower() for token in search.split() if token.strip()]
+        if tokens and search_columns:
+            combined = df[search_columns].fillna("").astype(str).agg(" ".join, axis=1).str.lower()
+            token_mask = pd.Series(True, index=df.index)
+            for token in tokens:
+                token_mask &= combined.str.contains(token, regex=False)
+            mask &= token_mask
+
+    return df.loc[mask].copy()
+
+
+def _build_filter_options(bundle: DatasetBundle) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        "dateRange": _filter_date_range(bundle),
+        "brand": [],
+        "model": [],
+        "modelYear": [],
+        "part": [],
+    }
+
+    brand_col = bundle.roles.get("brand")
+    model_col = bundle.roles.get("model")
+    model_year_col = bundle.roles.get("model_year")
+    part_col = bundle.roles.get("part_description") or bundle.roles.get("part_number")
+
+    if brand_col and brand_col in bundle.dataframe.columns:
+        options["brand"] = _build_value_options(bundle.dataframe[brand_col], limit=25)
+    if model_col and model_col in bundle.dataframe.columns:
+        options["model"] = _build_value_options(bundle.dataframe[model_col], limit=80)
+    if model_year_col and model_year_col in bundle.dataframe.columns:
+        options["modelYear"] = _build_value_options(
+            _display_series_for_column(bundle, model_year_col),
+            limit=20,
+            sort_by_count=False,
+        )
+    if part_col and part_col in bundle.dataframe.columns:
+        options["part"] = _build_value_options(bundle.dataframe[part_col], limit=120)
+
+    return options
+
+
+def _filter_date_range(bundle: DatasetBundle) -> dict[str, str | None]:
+    date_col = bundle.roles.get("date")
+    if not date_col or date_col not in bundle.date_candidates:
+        return {"min": None, "max": None}
+    parsed = bundle.date_candidates[date_col].dropna()
+    if parsed.empty:
+        return {"min": None, "max": None}
+    return {
+        "min": parsed.min().strftime("%Y-%m-%d"),
+        "max": parsed.max().strftime("%Y-%m-%d"),
+    }
+
+
+def _build_value_options(
+    series: pd.Series,
+    limit: int,
+    sort_by_count: bool = True,
+) -> list[dict[str, Any]]:
+    clean = series.dropna().astype(str)
+    clean = clean[clean.str.strip() != ""]
+    if clean.empty:
+        return []
+    counts = clean.value_counts()
+    if sort_by_count:
+        counts = counts.head(limit)
+    else:
+        counts = counts.sort_index().head(limit)
+    return [
+        {"label": value, "value": value, "count": int(count)}
+        for value, count in counts.items()
+    ]
+
+
+def _display_series_for_column(bundle: DatasetBundle, column: str) -> pd.Series:
+    if column == bundle.roles.get("model_year") and column in bundle.date_candidates:
+        return bundle.date_candidates[column].dt.year.astype("Int64").astype(str)
+    return bundle.dataframe[column].fillna("").astype(str)
+
+
+def _date_summary(bundle: DatasetBundle, filtered_df: pd.DataFrame) -> str:
+    date_col = bundle.roles.get("date")
+    if not date_col or date_col not in bundle.date_candidates:
+        return "No reliable date coverage was detected for this worksheet."
+    parsed = bundle.date_candidates[date_col].loc[filtered_df.index].dropna()
+    if parsed.empty:
+        return "No rows remain inside the current date filters."
+    return (
+        f"Coverage runs from {parsed.min().strftime('%Y-%m-%d')} to {parsed.max().strftime('%Y-%m-%d')} "
+        f"across {parsed.dt.to_period('M').nunique()} active months."
+    )
+
+
+def _dtype_name(series: pd.Series) -> str:
+    if pd.api.types.is_numeric_dtype(series):
+        return "numeric"
+    if pd.api.types.is_bool_dtype(series):
+        return "boolean"
+    return "text"
+
+
+def _serialize_cell(
+    value: Any,
+    date_fields: list[str],
+    column: str,
+    parsed_date: Any = None,
+    model_year_col: str | None = None,
+) -> Any:
+    if pd.isna(value):
+        return None
+    if model_year_col and column == model_year_col:
+        if parsed_date is not None and pd.notna(parsed_date):
+            return int(pd.to_datetime(parsed_date).year)
+        if isinstance(value, (int, float)):
+            return int(value)
+        return str(value)
+    if column in date_fields:
+        parsed = pd.to_datetime(parsed_date if parsed_date is not None else value, errors="coerce")
+        return parsed.strftime("%Y-%m-%d") if pd.notna(parsed) else str(value)
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, (int, float)):
+        return float(value)
+    return str(value)
