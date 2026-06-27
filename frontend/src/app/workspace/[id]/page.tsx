@@ -70,6 +70,9 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [chartFilterState, setChartFilterState] = useState<TableState>(defaultTableState);
+  const [chartData, setChartData] = useState<WorkspacePayload | null>(null);
+  const [chartLoading, setChartLoading] = useState(false);
 
   // Save custom column order to localStorage on change
   useEffect(() => {
@@ -206,6 +209,11 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
         } else {
           setVisibleColumns(payload.table.columns.map((c) => c.key));
         }
+
+        // Fetch chart data on new sheet load
+        const initialChartState = { ...defaultTableState, pageSize: state.pageSize };
+        setChartFilterState(initialChartState);
+        loadChartData(payload.sheetName, initialChartState);
       }
     } catch (err) {
       messageApi.error(err instanceof Error ? err.message : "Failed to load worksheet data.");
@@ -225,6 +233,44 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
     };
     setTableState(nextState);
     loadWorkspaceData(workspace.sheetName, nextState);
+  }
+
+  async function loadChartData(sheetName: string, state: TableState) {
+    const params = buildWorkspaceParams(state);
+    setChartLoading(true);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/workbooks/${id}/sheets/${encodeURIComponent(sheetName)}?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error("Failed to load chart metrics.");
+      }
+      const payload = (await response.json()) as WorkspacePayload;
+      setChartData(payload);
+      setChartFilterState(state);
+    } catch (err) {
+      messageApi.error("Failed to load chart metrics.");
+    } finally {
+      setChartLoading(false);
+    }
+  }
+
+  function handleChartFilterChange(updates: Partial<TableState>) {
+    if (!workspace) return;
+    const nextState = {
+      ...chartFilterState,
+      ...updates,
+      page: 1,
+    };
+    setChartFilterState(nextState);
+    loadChartData(workspace.sheetName, nextState);
+  }
+
+  function syncFiltersFromTable() {
+    if (!workspace) return;
+    setChartFilterState(tableState);
+    loadChartData(workspace.sheetName, tableState);
+    messageApi.success("Synchronized filter settings from Data Table");
   }
 
   function handleDragStart(e: React.DragEvent, index: number) {
@@ -284,8 +330,21 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   function exportCsv() {
     if (!workbook || !workspace) return;
     const params = buildWorkspaceParams({ ...tableState, page: 1 });
+    const orderedVisible = columnOrder.filter((key) => visibleColumns.includes(key));
+    params.append("visible_cols", orderedVisible.join(","));
     window.open(
       `${API_BASE_URL}/api/workbooks/${workbook.id}/sheets/${encodeURIComponent(workspace.sheetName)}/export.csv?${params.toString()}`,
+      "_blank"
+    );
+  }
+
+  function exportXlsx() {
+    if (!workbook || !workspace) return;
+    const params = buildWorkspaceParams({ ...tableState, page: 1 });
+    const orderedVisible = columnOrder.filter((key) => visibleColumns.includes(key));
+    params.append("visible_cols", orderedVisible.join(","));
+    window.open(
+      `${API_BASE_URL}/api/workbooks/${workbook.id}/sheets/${encodeURIComponent(workspace.sheetName)}/export.xlsx?${params.toString()}`,
       "_blank"
     );
   }
@@ -401,7 +460,8 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                   loadWorkspaceData(value, { ...defaultTableState, pageSize: tableState.pageSize });
                 }}
               />
-              <Button onClick={exportCsv}>Export filtered CSV</Button>
+              <Button onClick={exportCsv}>Export CSV</Button>
+              <Button onClick={exportXlsx}>Export Excel</Button>
             </Space>
           </div>
 
@@ -706,66 +766,183 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                 key: "insights",
                 label: "Basic Insights",
                 children: (
-                  <div className="chart-grid">
-                    {workspace.insights.monthlyInstallation ? (
-                      <Card className="chart-card">
-                        <ReactECharts
-                          option={chartOption(
-                            "Monthly installation quantity",
-                            workspace.insights.monthlyInstallation.labels,
-                            workspace.insights.monthlyInstallation.values,
-                            "line"
-                          )}
-                          style={{ height: 320 }}
-                        />
-                      </Card>
-                    ) : null}
-                    {workspace.insights.monthlyRevenue ? (
-                      <Card className="chart-card">
-                        <ReactECharts
-                          option={chartOption(
-                            "Monthly revenue",
-                            workspace.insights.monthlyRevenue.labels,
-                            workspace.insights.monthlyRevenue.values,
-                            "area"
-                          )}
-                          style={{ height: 320 }}
-                        />
-                      </Card>
-                    ) : null}
-                    {workspace.insights.topModels ? (
-                      <Card className="chart-card">
-                        <ReactECharts
-                          option={chartOption(
-                            "Top vehicle models by revenue",
-                            workspace.insights.topModels.labels,
-                            workspace.insights.topModels.values,
-                            "bar"
-                          )}
-                          style={{ height: 320 }}
-                        />
-                      </Card>
-                    ) : null}
-                    {workspace.insights.topParts ? (
-                      <Card className="chart-card">
-                        <ReactECharts
-                          option={chartOption(
-                            workspace.insights.topParts.title,
-                            workspace.insights.topParts.labels,
-                            workspace.insights.topParts.values,
-                            "bar"
-                          )}
-                          style={{ height: 320 }}
-                        />
-                      </Card>
-                    ) : null}
-                    {!Object.keys(workspace.insights).length ? (
+                  <div className="tab-stack">
+                    {chartData && (
                       <Card className="content-card">
-                        <Empty
-                          image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="The selected worksheet does not expose enough business-ready fields for the default insight set."
-                        />
+                        <div className="toolbar-grid">
+                          <Input
+                            allowClear
+                            prefix={<SearchOutlined />}
+                            placeholder="Search key fields (Press Enter)"
+                            value={chartFilterState.search}
+                            onChange={(event) => {
+                              const val = event.target.value;
+                              setChartFilterState({ ...chartFilterState, search: val });
+                              if (!val) {
+                                handleChartFilterChange({ search: "" });
+                              }
+                            }}
+                            onPressEnter={() => handleChartFilterChange({ search: chartFilterState.search })}
+                          />
+                          <Select
+                            mode="multiple"
+                            allowClear
+                            maxTagCount="responsive"
+                            placeholder="Brand"
+                            optionFilterProp="label"
+                            popupMatchSelectWidth={false}
+                            value={chartFilterState.brand}
+                            options={chartData.filterOptions.brand.map((option) => ({
+                              label: `${option.label} (${option.count.toLocaleString()})`,
+                              value: option.value,
+                            }))}
+                            onChange={(value) => handleChartFilterChange({ brand: value })}
+                          />
+                          <Select
+                            mode="multiple"
+                            allowClear
+                            maxTagCount="responsive"
+                            placeholder="Model"
+                            optionFilterProp="label"
+                            showSearch
+                            popupMatchSelectWidth={false}
+                            value={chartFilterState.model}
+                            options={chartData.filterOptions.model.map((option) => ({
+                              label: `${option.label} (${option.count.toLocaleString()})`,
+                              value: option.value,
+                            }))}
+                            onChange={(value) => handleChartFilterChange({ model: value })}
+                          />
+                          <Select
+                            mode="multiple"
+                            allowClear
+                            maxTagCount="responsive"
+                            placeholder="Model year"
+                            optionFilterProp="label"
+                            popupMatchSelectWidth={false}
+                            value={chartFilterState.modelYear}
+                            options={chartData.filterOptions.modelYear.map((option) => ({
+                              label: `${option.label} (${option.count.toLocaleString()})`,
+                              value: option.value,
+                            }))}
+                            onChange={(value) => handleChartFilterChange({ modelYear: value })}
+                          />
+                          <Select
+                            mode="multiple"
+                            allowClear
+                            maxTagCount="responsive"
+                            placeholder="Part"
+                            optionFilterProp="label"
+                            showSearch
+                            popupMatchSelectWidth={false}
+                            value={chartFilterState.part}
+                            options={chartData.filterOptions.part.map((option) => ({
+                              label: `${option.label} (${option.count.toLocaleString()})`,
+                              value: option.value,
+                            }))}
+                            onChange={(value) => handleChartFilterChange({ part: value })}
+                          />
+                          <RangePicker
+                            value={
+                              chartFilterState.startDate && chartFilterState.endDate
+                                ? [dayjs(chartFilterState.startDate), dayjs(chartFilterState.endDate)]
+                                : null
+                            }
+                            minDate={chartData.filterOptions.dateRange.min ? dayjs(chartData.filterOptions.dateRange.min) : undefined}
+                            maxDate={chartData.filterOptions.dateRange.max ? dayjs(chartData.filterOptions.dateRange.max) : undefined}
+                            onChange={(values) =>
+                              handleChartFilterChange({
+                                startDate: values?.[0]?.format("YYYY-MM-DD") ?? "",
+                                endDate: values?.[1]?.format("YYYY-MM-DD") ?? "",
+                              })
+                            }
+                          />
+                          <Button
+                            onClick={() => {
+                              const cleared = { ...defaultTableState, pageSize: chartFilterState.pageSize };
+                              setChartFilterState(cleared);
+                              loadChartData(workspace.sheetName, cleared);
+                            }}
+                          >
+                            Clear
+                          </Button>
+                          <Button type="primary" onClick={syncFiltersFromTable}>
+                            Sync from Data Table
+                          </Button>
+                        </div>
                       </Card>
+                    )}
+
+                    {chartLoading ? (
+                      <div className="loading-shell" style={{ minHeight: "40vh" }}>
+                        <div className="loading-card">
+                          <Spin size="large" />
+                          <p className="loading-msg">Refreshing charts…</p>
+                        </div>
+                      </div>
+                    ) : chartData ? (
+                      <div className="chart-grid">
+                        {chartData.insights.monthlyInstallation ? (
+                          <Card className="chart-card">
+                            <ReactECharts
+                              option={chartOption(
+                                "Monthly installation quantity",
+                                chartData.insights.monthlyInstallation.labels,
+                                chartData.insights.monthlyInstallation.values,
+                                "line"
+                              )}
+                              style={{ height: 320 }}
+                            />
+                          </Card>
+                        ) : null}
+                        {chartData.insights.monthlyRevenue ? (
+                          <Card className="chart-card">
+                            <ReactECharts
+                              option={chartOption(
+                                "Monthly revenue",
+                                chartData.insights.monthlyRevenue.labels,
+                                chartData.insights.monthlyRevenue.values,
+                                "area"
+                              )}
+                              style={{ height: 320 }}
+                            />
+                          </Card>
+                        ) : null}
+                        {chartData.insights.topModels ? (
+                          <Card className="chart-card">
+                            <ReactECharts
+                              option={chartOption(
+                                "Top vehicle models by revenue",
+                                chartData.insights.topModels.labels,
+                                chartData.insights.topModels.values,
+                                "bar"
+                              )}
+                              style={{ height: 320 }}
+                            />
+                          </Card>
+                        ) : null}
+                        {chartData.insights.topParts ? (
+                          <Card className="chart-card">
+                            <ReactECharts
+                              option={chartOption(
+                                chartData.insights.topParts.title,
+                                chartData.insights.topParts.labels,
+                                chartData.insights.topParts.values,
+                                "bar"
+                              )}
+                              style={{ height: 320 }}
+                            />
+                          </Card>
+                        ) : null}
+                        {!Object.keys(chartData.insights).length ? (
+                          <Card className="content-card">
+                            <Empty
+                              image={Empty.PRESENTED_IMAGE_SIMPLE}
+                              description="The selected worksheet does not expose enough business-ready fields for the default insight set."
+                            />
+                          </Card>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
                 ),

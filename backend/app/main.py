@@ -334,6 +334,7 @@ def export_filtered_csv(
     part_query: str = Query(default=""),
     start_date: str = Query(default=""),
     end_date: str = Query(default=""),
+    visible_cols: str = Query(default=""),
 ) -> StreamingResponse:
     session = _get_session(workbook_id)
     bundle = _get_bundle(session, sheet_name)
@@ -350,6 +351,11 @@ def export_filtered_csv(
         end_date=end_date,
     )
 
+    if visible_cols:
+        cols_to_export = [c for c in visible_cols.split(",") if c in filtered.columns]
+        if cols_to_export:
+            filtered = filtered[cols_to_export]
+
     output = StringIO()
     filtered.to_csv(output, index=False)
     output.seek(0)
@@ -358,6 +364,58 @@ def export_filtered_csv(
         "Content-Disposition": f'attachment; filename="{session.filename.rsplit(".", 1)[0]}-{sheet_name}.csv"'
     }
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+
+
+@app.get("/api/workbooks/{workbook_id}/sheets/{sheet_name}/export.xlsx")
+def export_filtered_xlsx(
+    workbook_id: str,
+    sheet_name: str,
+    search: str = Query(default=""),
+    brand: list[str] = Query(default=[]),
+    model: list[str] = Query(default=[]),
+    model_year: list[str] = Query(default=[]),
+    part: list[str] = Query(default=[]),
+    model_query: str = Query(default=""),
+    part_query: str = Query(default=""),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    visible_cols: str = Query(default=""),
+) -> StreamingResponse:
+    session = _get_session(workbook_id)
+    bundle = _get_bundle(session, sheet_name)
+    filtered = _apply_filters(
+        bundle,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        part=part,
+        model_query=model_query,
+        part_query=part_query,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    if visible_cols:
+        cols_to_export = [c for c in visible_cols.split(",") if c in filtered.columns]
+        if cols_to_export:
+            filtered = filtered[cols_to_export]
+
+    import io
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        filtered.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    output.seek(0)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{session.filename.rsplit(".", 1)[0]}-{sheet_name}.xlsx"'
+    }
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
+
 
 
 @app.exception_handler(Exception)
