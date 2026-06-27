@@ -244,6 +244,9 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
             if (value === null || value === undefined || value === "") {
               return <span className="cell-empty">-</span>;
             }
+            if (column.type === "year") {
+              return String(value);
+            }
             if (typeof value === "number") {
               return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
             }
@@ -456,7 +459,20 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           }))}
                           onChange={(value) => handleFilterChange({ model: value })}
                         />
-
+                        <Select
+                          mode="multiple"
+                          allowClear
+                          maxTagCount={1}
+                          placeholder={workspace.roles.model_year ? `Model year (${workspace.roles.model_year})` : "Model year"}
+                          optionFilterProp="label"
+                          popupMatchSelectWidth={false}
+                          value={tableState.modelYear}
+                          options={workspace.filterOptions.modelYear.map((option) => ({
+                            label: `${option.label} (${option.count.toLocaleString()})`,
+                            value: option.value,
+                          }))}
+                          onChange={(value) => handleFilterChange({ modelYear: value })}
+                        />
                         <Select
                           mode="multiple"
                           allowClear
