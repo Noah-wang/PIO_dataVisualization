@@ -31,6 +31,12 @@ ROLE_LABELS = {
     "revenue": "Revenue",
 }
 
+SUPPORTING_FIELD_LABELS = {
+    "PIS_MST_IVC_DT": "Invoice Date",
+    "PIS_SERI": "Vehicle Series",
+    "YYYYMM": "Year-Month",
+}
+
 FIELD_GROUPS = {
     "date": "Time",
     "brand": "Vehicle",
@@ -552,7 +558,7 @@ def _build_field_classification(bundle: DatasetBundle) -> dict[str, list[dict[st
             {
                 "column": column,
                 "group": group,
-                "detectedRole": ROLE_LABELS.get(role, "Supporting field"),
+                "detectedRole": ROLE_LABELS.get(role) if role else SUPPORTING_FIELD_LABELS.get(column, "Supporting field"),
                 "confidence": confidence,
                 "type": row["Type"],
                 "missingPct": row["Missing %"],
@@ -679,7 +685,7 @@ def _build_table_page(
             {
                 "key": column,
                 "title": column,
-                "role": ROLE_LABELS.get(role, ""),
+                "role": ROLE_LABELS.get(role) if role else SUPPORTING_FIELD_LABELS.get(column, ""),
                 "type": "year" if column == model_year_col else "date" if column in bundle.date_fields else _dtype_name(working[column]),
             }
         )
