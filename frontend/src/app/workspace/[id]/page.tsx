@@ -259,11 +259,6 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
           title: (
             <div className="column-heading">
               <span style={{ fontWeight: 600 }}>{hasRole ? column.role : column.title}</span>
-              {hasRole ? (
-                <Text type="secondary" style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 400 }}>
-                  {column.title}
-                </Text>
-              ) : null}
             </div>
           ),
           dataIndex: column.key,
@@ -464,7 +459,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount="responsive"
-                          placeholder={workspace.roles.brand ? `Brand (${workspace.roles.brand})` : "Brand"}
+                          placeholder="Brand"
                           optionFilterProp="label"
                           popupMatchSelectWidth={false}
                           value={tableState.brand}
@@ -478,7 +473,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount="responsive"
-                          placeholder={workspace.roles.model ? `Model (${workspace.roles.model})` : "Model"}
+                          placeholder="Model"
                           optionFilterProp="label"
                           showSearch
                           popupMatchSelectWidth={false}
@@ -493,7 +488,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount="responsive"
-                          placeholder={workspace.roles.model_year ? `Model year (${workspace.roles.model_year})` : "Model year"}
+                          placeholder="Model year"
                           optionFilterProp="label"
                           popupMatchSelectWidth={false}
                           value={tableState.modelYear}
@@ -507,11 +502,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount="responsive"
-                          placeholder={
-                            workspace.roles.part_description || workspace.roles.part_number
-                              ? `Part (${workspace.roles.part_description || workspace.roles.part_number})`
-                              : "Part"
-                          }
+                          placeholder="Part"
                           optionFilterProp="label"
                           showSearch
                           popupMatchSelectWidth={false}
@@ -569,7 +560,6 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                               >
                                 <span className="drag-handle">⋮⋮</span>
                                 <span className="tag-text">{displayName}</span>
-                                {col.title !== displayName ? <span className="tag-sub">({col.title})</span> : null}
                               </div>
                             );
                           })}
