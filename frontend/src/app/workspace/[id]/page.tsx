@@ -431,7 +431,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount={1}
-                          placeholder="Brand"
+                          placeholder={workspace.roles.brand ? `Brand (${workspace.roles.brand})` : "Brand"}
                           optionFilterProp="label"
                           popupMatchSelectWidth={false}
                           value={tableState.brand}
@@ -445,7 +445,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount={1}
-                          placeholder="Model"
+                          placeholder={workspace.roles.model ? `Model (${workspace.roles.model})` : "Model"}
                           optionFilterProp="label"
                           showSearch
                           popupMatchSelectWidth={false}
@@ -460,7 +460,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount={1}
-                          placeholder="Model year"
+                          placeholder={workspace.roles.model_year ? `Model year (${workspace.roles.model_year})` : "Model year"}
                           optionFilterProp="label"
                           popupMatchSelectWidth={false}
                           value={tableState.modelYear}
@@ -474,7 +474,11 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           mode="multiple"
                           allowClear
                           maxTagCount={1}
-                          placeholder="Part"
+                          placeholder={
+                            workspace.roles.part_description || workspace.roles.part_number
+                              ? `Part (${workspace.roles.part_description || workspace.roles.part_number})`
+                              : "Part"
+                          }
                           optionFilterProp="label"
                           showSearch
                           popupMatchSelectWidth={false}
