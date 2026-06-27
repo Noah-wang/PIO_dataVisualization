@@ -130,7 +130,18 @@ export function chartOption(title: string, labels: string[], values: number[], k
   return {
     backgroundColor: "transparent",
     animationDuration: 600,
-    grid: { left: 40, right: 20, top: 50, bottom: 35 },
+    grid: { left: 40, right: 20, top: 55, bottom: 35 },
+    toolbox: {
+      show: true,
+      right: 0,
+      top: 5,
+      feature: {
+        saveAsImage: {
+          show: true,
+          title: "Save Image",
+        },
+      },
+    },
     tooltip: {
       trigger: "axis",
       backgroundColor: "#101725",
