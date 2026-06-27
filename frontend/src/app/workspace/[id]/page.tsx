@@ -223,27 +223,34 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   const columns: TableColumnsType<Record<string, string | number | null>> =
     workspace?.table.columns
       .filter((column) => visibleColumns.includes(column.key))
-      .map((column) => ({
-        title: (
-          <div className="column-heading">
-            <span>{column.title}</span>
-            {column.role ? <Tag>{column.role}</Tag> : null}
-          </div>
-        ),
-        dataIndex: column.key,
-        key: column.key,
-        sorter: true,
-        width: column.type === "text" ? 220 : 160,
-        render: (value) => {
-          if (value === null || value === undefined || value === "") {
-            return <span className="cell-empty">-</span>;
-          }
-          if (typeof value === "number") {
-            return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
-          }
-          return value;
-        },
-      })) ?? [];
+      .map((column) => {
+        const hasRole = Boolean(column.role);
+        return {
+          title: (
+            <div className="column-heading">
+              <span style={{ fontWeight: 600 }}>{hasRole ? column.role : column.title}</span>
+              {hasRole ? (
+                <Text type="secondary" style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 400 }}>
+                  {column.title}
+                </Text>
+              ) : null}
+            </div>
+          ),
+          dataIndex: column.key,
+          key: column.key,
+          sorter: true,
+          width: column.type === "text" ? 220 : 160,
+          render: (value) => {
+            if (value === null || value === undefined || value === "") {
+              return <span className="cell-empty">-</span>;
+            }
+            if (typeof value === "number") {
+              return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
+            }
+            return value;
+          },
+        };
+      }) ?? [];
 
   return (
     <main className="page-shell">
