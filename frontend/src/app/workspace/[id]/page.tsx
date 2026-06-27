@@ -722,49 +722,8 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                 ),
               },
               {
-                key: "classification",
-                label: "Field Classification",
-                children: (
-                  <div className="classification-stack">
-                    {Object.entries(workspace.classification).map(([group, fields]) => (
-                      <Card key={group} className="content-card" title={group}>
-                        <div className="field-grid">
-                          {fields.map((field) => (
-                            <div key={field.column} className="field-card">
-                              <div className="field-topline">
-                                <Text strong>{field.column}</Text>
-                                <Tag color={field.confidence === "High" ? "blue" : field.confidence === "Medium" ? "gold" : "default"}>
-                                  {field.confidence}
-                                </Tag>
-                              </div>
-                              <div className="field-meta">
-                                <span>{field.detectedRole}</span>
-                                <span>{field.type}</span>
-                              </div>
-                              <div className="field-stats">
-                                <div>
-                                  <label>Missing</label>
-                                  <strong>{field.missingPct}%</strong>
-                                </div>
-                                <div>
-                                  <label>Unique</label>
-                                  <strong>{field.uniqueCount.toLocaleString()}</strong>
-                                </div>
-                              </div>
-                              <Paragraph className="field-sample" ellipsis={{ rows: 2 }}>
-                                {field.sampleValues || "No sample values available."}
-                              </Paragraph>
-                            </div>
-                          ))}
-                        </div>
-                      </Card>
-                    ))}
-                  </div>
-                ),
-              },
-              {
                 key: "insights",
-                label: "Basic Insights",
+                label: "Visual Charts",
                 children: (
                   <div className="tab-stack">
                     {chartData && (
@@ -944,6 +903,55 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         ) : null}
                       </div>
                     ) : null}
+                  </div>
+                ),
+              },
+              {
+                key: "classification",
+                label: "Field Classification",
+                children: (
+                  <div className="classification-stack">
+                    {Object.entries(workspace.classification).map(([group, fields]) => (
+                      <Card key={group} className="content-card" title={group}>
+                        <div className="field-grid">
+                          {fields.map((field) => (
+                            <div key={field.column} className="field-card">
+                              <div className="field-topline">
+                                <Text strong>{field.column}</Text>
+                                <Tag color={field.confidence === "High" ? "blue" : field.confidence === "Medium" ? "gold" : "default"}>
+                                  {field.confidence}
+                                </Tag>
+                              </div>
+                              <div className="field-meta">
+                                <div>
+                                  <label>Group</label>
+                                  <strong>{field.group}</strong>
+                                </div>
+                                <div>
+                                  <label>Role</label>
+                                  <strong>{field.detectedRole}</strong>
+                                </div>
+                                <div>
+                                  <label>Type</label>
+                                  <strong>{field.type}</strong>
+                                </div>
+                                <div>
+                                  <label>Missing</label>
+                                  <strong>{field.missingPct}%</strong>
+                                </div>
+                                <div>
+                                  <label>Unique</label>
+                                  <strong>{field.uniqueCount.toLocaleString()}</strong>
+                                </div>
+                              </div>
+                              <Paragraph className="field-sample" ellipsis={{ rows: 2 }}>
+                                {field.sampleValues || "No sample values available."}
+                              </Paragraph>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    ))}
                   </div>
                 ),
               },
