@@ -591,6 +591,63 @@ def _build_overview(
 
     insights = build_insights(filtered_df, bundle.roles, bundle.date_candidates, "en")
 
+    # Calculate Leaderboard Metrics
+    leaders = {}
+    brand_col = bundle.roles.get("brand")
+    model_col = bundle.roles.get("model")
+    part_col = bundle.roles.get("part_description") or bundle.roles.get("part_number")
+    revenue_col = bundle.roles.get("revenue")
+    qty_col = bundle.roles.get("installation_quantity")
+
+    if brand_col and brand_col in filtered_df.columns:
+        metric = revenue_col if revenue_col and revenue_col in filtered_df.columns else qty_col
+        if metric:
+            top_brand = filtered_df.groupby(brand_col)[metric].sum().sort_values(ascending=False)
+            if not top_brand.empty:
+                leaders["topBrand"] = {
+                    "name": str(top_brand.index[0]),
+                    "value": float(top_brand.iloc[0]),
+                    "metric": "Revenue" if metric == revenue_col else "Quantity",
+                }
+
+    if model_col and model_col in filtered_df.columns:
+        metric = revenue_col if revenue_col and revenue_col in filtered_df.columns else qty_col
+        if metric:
+            top_model = filtered_df.groupby(model_col)[metric].sum().sort_values(ascending=False)
+            if not top_model.empty:
+                leaders["topModel"] = {
+                    "name": str(top_model.index[0]),
+                    "value": float(top_model.iloc[0]),
+                    "metric": "Revenue" if metric == revenue_col else "Quantity",
+                }
+
+    if part_col and part_col in filtered_df.columns:
+        metric = qty_col if qty_col and qty_col in filtered_df.columns else revenue_col
+        if metric:
+            top_part = filtered_df.groupby(part_col)[metric].sum().sort_values(ascending=False)
+            if not top_part.empty:
+                leaders["topPart"] = {
+                    "name": str(top_part.index[0]),
+                    "value": float(top_part.iloc[0]),
+                    "metric": "Quantity" if metric == qty_col else "Revenue",
+                }
+
+    # Calculate additional average/density metrics
+    stats = {}
+    total_rev = float(filtered_df[revenue_col].sum()) if revenue_col and revenue_col in filtered_df.columns else None
+    total_qty = float(filtered_df[qty_col].sum()) if qty_col and qty_col in filtered_df.columns else None
+    total_records = len(filtered_df)
+
+    if total_rev is not None and total_qty is not None and total_qty > 0:
+        stats["avgUnitPrice"] = total_rev / total_qty
+    if total_qty is not None and total_records > 0:
+        stats["avgQtyPerRow"] = total_qty / total_records
+    if total_rev is not None and total_records > 0:
+        stats["avgRevPerRow"] = total_rev / total_records
+
+    # Overall file completeness (mean non-missing %)
+    stats["completenessRate"] = float(100.0 - profile_df["Missing %"].mean())
+
     return {
         "datasetTitle": filename,
         "sheetName": sheet_name,
@@ -598,6 +655,8 @@ def _build_overview(
         "summary": summary,
         "health": health,
         "autoInsights": insights,
+        "leaders": leaders,
+        "stats": stats,
     }
 
 

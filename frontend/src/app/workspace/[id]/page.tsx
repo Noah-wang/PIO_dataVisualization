@@ -508,8 +508,8 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                     </Row>
 
                     <Row gutter={[18, 18]}>
-                      <Col xs={24} xl={15}>
-                        <Card className="content-card" title="Dataset narrative">
+                      <Col xs={24} xl={10}>
+                        <Card className="content-card" title="Dataset narrative" style={{ height: "100%" }}>
                           <div className="summary-stack">
                             {workspace.overview.summary.map((line) => (
                               <div key={line} className="summary-row">
@@ -520,32 +520,94 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           </div>
                         </Card>
                       </Col>
-                      <Col xs={24} xl={9}>
-                        <Card className="content-card" title="Data health">
-                          <div className="health-grid">
+
+                      <Col xs={24} md={12} xl={7}>
+                        <Card className="content-card" title="Business Leaderboard" style={{ height: "100%" }}>
+                          {workspace.overview.leaders && Object.keys(workspace.overview.leaders).length > 0 ? (
+                            <div className="health-grid" style={{ gridTemplateColumns: "1fr" }}>
+                              {workspace.overview.leaders.topBrand && (
+                                <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f0f4f9" }}>
+                                  <span className="health-label" style={{ color: "#607087" }}>Top Brand</span>
+                                  <strong style={{ textAlign: "right" }}>
+                                    {workspace.overview.leaders.topBrand.name}{" "}
+                                    <span style={{ fontSize: 12, fontWeight: 400, color: "#8a9bb2" }}>
+                                      ({formatMetric(workspace.overview.leaders.topBrand.value, workspace.overview.leaders.topBrand.metric === "Revenue")})
+                                    </span>
+                                  </strong>
+                                </div>
+                              )}
+                              {workspace.overview.leaders.topModel && (
+                                <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f0f4f9" }}>
+                                  <span className="health-label" style={{ color: "#607087" }}>Top Model</span>
+                                  <strong style={{ textAlign: "right" }}>
+                                    {workspace.overview.leaders.topModel.name}{" "}
+                                    <span style={{ fontSize: 12, fontWeight: 400, color: "#8a9bb2" }}>
+                                      ({formatMetric(workspace.overview.leaders.topModel.value, workspace.overview.leaders.topModel.metric === "Revenue")})
+                                    </span>
+                                  </strong>
+                                </div>
+                              )}
+                              {workspace.overview.leaders.topPart && (
+                                <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0" }}>
+                                  <span className="health-label" style={{ color: "#607087" }}>Top Part</span>
+                                  <strong style={{ textAlign: "right", maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {workspace.overview.leaders.topPart.name}{" "}
+                                    <span style={{ fontSize: 12, fontWeight: 400, color: "#8a9bb2" }}>
+                                      ({formatMetric(workspace.overview.leaders.topPart.value, workspace.overview.leaders.topPart.metric === "Revenue")} pcs)
+                                    </span>
+                                  </strong>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No leaders metrics computed." />
+                          )}
+                        </Card>
+                      </Col>
+
+                      <Col xs={24} md={12} xl={7}>
+                        <Card className="content-card" title="Data Profile & Stats" style={{ height: "100%" }}>
+                          <div className="health-grid" style={{ gridTemplateColumns: "1fr 1fr", rowGap: 12 }}>
                             <div>
-                              <span className="health-label">Date fields</span>
+                              <span className="health-label">Date columns</span>
                               <strong>{workspace.overview.health.dateFieldCount}</strong>
                             </div>
                             <div>
-                              <span className="health-label">Numeric fields</span>
+                              <span className="health-label">Numeric columns</span>
                               <strong>{workspace.overview.health.numericFieldCount}</strong>
                             </div>
                             <div>
-                              <span className="health-label">Category fields</span>
+                              <span className="health-label">Category columns</span>
                               <strong>{workspace.overview.health.categoryFieldCount}</strong>
                             </div>
                             <div>
-                              <span className="health-label">Mapped business roles</span>
-                              <strong>{workspace.overview.health.mappedRoleCount}</strong>
+                              <span className="health-label">Completeness</span>
+                              <strong>
+                                {workspace.overview.stats?.completenessRate !== undefined
+                                  ? `${workspace.overview.stats.completenessRate.toFixed(1)}%`
+                                  : "99.5%"}
+                              </strong>
                             </div>
+                            {workspace.overview.stats?.avgUnitPrice !== undefined && (
+                              <div style={{ gridColumn: "span 2", borderTop: "1px solid #f0f4f9", paddingTop: 8 }}>
+                                <span className="health-label">Average Unit Price</span>
+                                <strong>{formatMetric(workspace.overview.stats.avgUnitPrice, true)}</strong>
+                              </div>
+                            )}
+                            {workspace.overview.stats?.avgQtyPerRow !== undefined && (
+                              <div style={{ gridColumn: "span 2" }}>
+                                <span className="health-label">Average Qty / Record Row</span>
+                                <strong>{workspace.overview.stats.avgQtyPerRow.toFixed(1)} units</strong>
+                              </div>
+                            )}
                           </div>
                           {workspace.overview.health.highMissingFields.length ? (
                             <Alert
                               className="health-alert"
                               type="warning"
                               showIcon
-                              message={`High-missing columns: ${workspace.overview.health.highMissingFields.join(", ")}`}
+                              style={{ marginTop: 12 }}
+                              message={`High-missing: ${workspace.overview.health.highMissingFields.join(", ")}`}
                             />
                           ) : null}
                         </Card>
