@@ -240,7 +240,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
 
       <div style={{ marginBottom: 20 }}>
         <Link href="/" style={{ color: "var(--accent)", fontWeight: 500, display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <LeftOutlined style={{ fontSize: 12 }} /> Back to 首页
+          <LeftOutlined style={{ fontSize: 12 }} /> Back to Home
         </Link>
       </div>
 
