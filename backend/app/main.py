@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -79,6 +80,12 @@ def _save_index(entries: list[dict]) -> None:
     INDEX_FILE.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _bundle_cache_path(workbook_id: str, sheet_name: str) -> Path:
+    # Ensure sheet_name doesn't contain path traversal characters
+    safe_name = "".join(c for c in sheet_name if c.isalnum() or c in ("-", "_")).rstrip()
+    return OUTPUTS_DIR / f"{workbook_id}_{safe_name}_bundle.pkl"
+
+
 def _add_to_index(workbook_id: str, filename: str, sheet_names: list[str]) -> None:
     entries = _load_index()
     # Remove duplicate
@@ -97,6 +104,9 @@ def _add_to_index(workbook_id: str, filename: str, sheet_names: list[str]) -> No
         p = OUTPUTS_DIR / f"{entry['id']}.xlsx"
         if p.exists():
             p.unlink(missing_ok=True)
+        # Clean up corresponding .pkl files
+        for cache_file in OUTPUTS_DIR.glob(f"{entry['id']}_*_bundle.pkl"):
+            cache_file.unlink(missing_ok=True)
     _save_index(entries)
 
 
@@ -191,15 +201,15 @@ def get_workbook_status(workbook_id: str) -> dict[str, Any]:
     status = WORKBOOK_STATUS.get(workbook_id)
     session = WORKBOOKS.get(workbook_id)
 
-    if status and session:
+    if status == "ready" and session:
         return {
-            "status": status,
+            "status": "ready",
             "filename": session.filename,
             "sheetNames": session.sheet_names,
             "defaultSheet": session.sheet_names[0] if session.sheet_names else None,
         }
 
-    # Not in memory — try to restore from disk (e.g. after backend restart)
+    # Not in memory — try to restore from disk
     entries = _load_index()
     entry = next((e for e in entries if e["id"] == workbook_id), None)
     if not entry:
@@ -209,28 +219,61 @@ def get_workbook_status(workbook_id: str) -> dict[str, Any]:
     if not out_file.exists():
         raise HTTPException(status_code=404, detail="Workbook file not found on disk.")
 
-    file_bytes = out_file.read_bytes()
-    session = WorkbookSession(
-        workbook_id=workbook_id,
-        filename=entry["filename"],
-        file_bytes=file_bytes,
-        sheet_names=entry["sheetNames"],
-    )
-    WORKBOOKS[workbook_id] = session
-    WORKBOOK_STATUS[workbook_id] = "processing"
+    default_sheet = entry.get("defaultSheet") or entry["sheetNames"][0]
+    cache_p = _bundle_cache_path(workbook_id, default_sheet)
 
-    thread = threading.Thread(
-        target=_process_workbook_background,
-        args=(workbook_id,),
-        daemon=True,
-    )
-    thread.start()
+    # ── Option A: Load from pkl cache instantly if it exists ──────────────────
+    if cache_p.exists():
+        if not session:
+            file_bytes = out_file.read_bytes()
+            session = WorkbookSession(
+                workbook_id=workbook_id,
+                filename=entry["filename"],
+                file_bytes=file_bytes,
+                sheet_names=entry["sheetNames"],
+            )
+            WORKBOOKS[workbook_id] = session
+        
+        if default_sheet not in session.bundles:
+            try:
+                with open(cache_p, "rb") as f:
+                    session.bundles[default_sheet] = pickle.load(f)
+            except Exception:
+                pass
+
+        WORKBOOK_STATUS[workbook_id] = "ready"
+        return {
+            "status": "ready",
+            "filename": entry["filename"],
+            "sheetNames": entry["sheetNames"],
+            "defaultSheet": default_sheet,
+        }
+
+    # ── Option B: Cache does not exist — compute in background ────────────────
+    if not session:
+        file_bytes = out_file.read_bytes()
+        session = WorkbookSession(
+            workbook_id=workbook_id,
+            filename=entry["filename"],
+            file_bytes=file_bytes,
+            sheet_names=entry["sheetNames"],
+        )
+        WORKBOOKS[workbook_id] = session
+
+    if status != "processing":
+        WORKBOOK_STATUS[workbook_id] = "processing"
+        thread = threading.Thread(
+            target=_process_workbook_background,
+            args=(workbook_id,),
+            daemon=True,
+        )
+        thread.start()
 
     return {
         "status": "processing",
         "filename": entry["filename"],
         "sheetNames": entry["sheetNames"],
-        "defaultSheet": entry.get("defaultSheet"),
+        "defaultSheet": default_sheet,
     }
 
 
@@ -343,9 +386,32 @@ def _get_session(workbook_id: str) -> WorkbookSession:
 def _get_bundle(session: WorkbookSession, sheet_name: str) -> DatasetBundle:
     if sheet_name not in session.sheet_names:
         raise HTTPException(status_code=404, detail="Sheet not found in workbook.")
-    if sheet_name not in session.bundles:
-        session.bundles[sheet_name] = load_dataset(session.file_bytes, sheet_name, header_mode="Auto detect")
-    return session.bundles[sheet_name]
+    
+    if sheet_name in session.bundles:
+        return session.bundles[sheet_name]
+
+    cache_p = _bundle_cache_path(session.workbook_id, sheet_name)
+    if cache_p.exists():
+        try:
+            with open(cache_p, "rb") as f:
+                bundle = pickle.load(f)
+            session.bundles[sheet_name] = bundle
+            return bundle
+        except Exception:
+            pass
+
+    # No cache file — parse and infer
+    bundle = load_dataset(session.file_bytes, sheet_name, header_mode="Auto detect")
+    session.bundles[sheet_name] = bundle
+
+    # Save to disk cache
+    try:
+        with open(cache_p, "wb") as f:
+            pickle.dump(bundle, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        pass
+
+    return bundle
 
 
 def _build_workspace_payload(
