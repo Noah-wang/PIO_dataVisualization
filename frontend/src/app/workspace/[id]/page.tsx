@@ -307,7 +307,6 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
           ),
           dataIndex: column.key,
           key: column.key,
-          sorter: true,
           width: (() => {
             const roleOrTitle = column.role || column.title;
             if (
@@ -319,6 +318,14 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
               column.type === "year"
             ) {
               return 110;
+            }
+            if (
+              roleOrTitle === "Vehicle model" ||
+              roleOrTitle === "Part number" ||
+              column.key === "Model" ||
+              column.key === "PIS_PNO"
+            ) {
+              return 120;
             }
             return column.type === "text" ? 220 : 140;
           })(),
