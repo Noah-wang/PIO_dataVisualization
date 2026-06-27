@@ -264,7 +264,20 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
           dataIndex: column.key,
           key: column.key,
           sorter: true,
-          width: column.type === "text" ? 220 : 160,
+          width: (() => {
+            const roleOrTitle = column.role || column.title;
+            if (
+              roleOrTitle === "Brand" ||
+              roleOrTitle === "Series" ||
+              column.key === "PIS_CMP_KND" ||
+              column.key === "PIS_SERI" ||
+              column.key === "PIS_MDL_YY" ||
+              column.type === "year"
+            ) {
+              return 110;
+            }
+            return column.type === "text" ? 220 : 140;
+          })(),
           render: (value) => {
             if (value === null || value === undefined || value === "") {
               return <span className="cell-empty">-</span>;

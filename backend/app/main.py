@@ -33,7 +33,7 @@ ROLE_LABELS = {
 
 SUPPORTING_FIELD_LABELS = {
     "PIS_MST_IVC_DT": "Invoice Date",
-    "PIS_SERI": "Vehicle Series",
+    "PIS_SERI": "Series",
     "YYYYMM": "Year-Month",
 }
 
