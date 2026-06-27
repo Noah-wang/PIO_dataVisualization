@@ -67,14 +67,9 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [tableState, setTableState] = useState<TableState>(defaultTableState);
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
+  const [columnOrder, setColumnOrder] = useState<string[]>([]);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // Set visible columns when workspace loads
-  useEffect(() => {
-    if (workspace && visibleColumns.length === 0) {
-      setVisibleColumns(workspace.table.defaultVisibleColumns);
-    }
-  }, [workspace, visibleColumns.length]);
 
   // Initial status check & polling
   useEffect(() => {
@@ -163,8 +158,10 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
       const payload = (await response.json()) as WorkspacePayload;
       setWorkspace(payload);
       setTableState(state);
-      if (!silent && visibleColumns.length === 0) {
-        setVisibleColumns(payload.table.defaultVisibleColumns);
+      const isNewSheet = !workspace || workspace.sheetName !== payload.sheetName;
+      if (isNewSheet || columnOrder.length === 0) {
+        setColumnOrder(payload.table.columns.map((c) => c.key));
+        setVisibleColumns(payload.table.columns.map((c) => c.key));
       }
     } catch (err) {
       messageApi.error(err instanceof Error ? err.message : "Failed to load worksheet data.");
@@ -184,6 +181,35 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
     };
     setTableState(nextState);
     loadWorkspaceData(workspace.sheetName, nextState);
+  }
+
+  function handleDragStart(e: React.DragEvent, index: number) {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleDragOver(e: React.DragEvent, hoverIndex: number) {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === hoverIndex) return;
+
+    const newOrder = [...columnOrder];
+    const draggedItem = newOrder[draggedIndex];
+    newOrder.splice(draggedIndex, 1);
+    newOrder.splice(hoverIndex, 0, draggedItem);
+    setDraggedIndex(hoverIndex);
+    setColumnOrder(newOrder);
+  }
+
+  function handleDragEnd() {
+    setDraggedIndex(null);
+  }
+
+  function toggleColumnVisibility(key: string) {
+    if (visibleColumns.includes(key)) {
+      setVisibleColumns(visibleColumns.filter((k) => k !== key));
+    } else {
+      setVisibleColumns([...visibleColumns, key]);
+    }
   }
 
   function handleTableChange(
@@ -220,9 +246,13 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
     );
   }
 
+  const columnsList = columnOrder.length > 0
+    ? columnOrder.map((key) => workspace?.table.columns.find((c) => c.key === key)!)
+    : (workspace?.table.columns ?? []);
+
   const columns: TableColumnsType<Record<string, string | number | null>> =
-    workspace?.table.columns
-      .filter((column) => visibleColumns.includes(column.key))
+    columnsList
+      .filter((column) => column && visibleColumns.includes(column.key))
       .map((column) => {
         const hasRole = Boolean(column.role);
         return {
@@ -253,7 +283,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
             return value;
           },
         };
-      }) ?? [];
+      });
 
   return (
     <main className="page-shell">
@@ -507,25 +537,6 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                             })
                           }
                         />
-                        <Select
-                          mode="multiple"
-                          className="visible-columns-select"
-                          value={visibleColumns}
-                          maxTagCount="responsive"
-                          placeholder="Visible columns"
-                          popupMatchSelectWidth={false}
-                          optionLabelProp="tagLabel"
-                          options={workspace.table.columns.map((column) => {
-                            const label = column.role ? `${column.role} (${column.title})` : column.title;
-                            const tagLabel = column.role || column.title;
-                            return {
-                              label: label,
-                              value: column.key,
-                              tagLabel: tagLabel,
-                            };
-                          })}
-                          onChange={setVisibleColumns}
-                        />
                         <Button
                           onClick={() => {
                             setTableState({ ...defaultTableState, pageSize: tableState.pageSize });
@@ -534,6 +545,35 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         >
                           Clear
                         </Button>
+                      </div>
+
+                      <div className="visible-columns-section">
+                        <div className="visible-columns-label">
+                          Visible Columns & Ordering (Drag items to reorder column layout):
+                        </div>
+                        <div className="column-tags-list">
+                          {columnOrder.map((key, index) => {
+                            const col = workspace.table.columns.find((c) => c.key === key);
+                            if (!col) return null;
+                            const isVisible = visibleColumns.includes(key);
+                            const displayName = col.role || col.title;
+                            return (
+                              <div
+                                key={key}
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, index)}
+                                onDragOver={(e) => handleDragOver(e, index)}
+                                onDragEnd={handleDragEnd}
+                                onClick={() => toggleColumnVisibility(key)}
+                                className={`column-drag-tag ${isVisible ? "active" : "inactive"}`}
+                              >
+                                <span className="drag-handle">⋮⋮</span>
+                                <span className="tag-text">{displayName}</span>
+                                {col.title !== displayName ? <span className="tag-sub">({col.title})</span> : null}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     </Card>
 

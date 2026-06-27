@@ -713,3 +713,83 @@ a {
     grid-template-columns: 1fr;
   }
 }
+
+/* Draggable Column Tags Bar */
+.visible-columns-section {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.visible-columns-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted-text);
+  margin-bottom: 12px;
+}
+
+.column-tags-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.column-drag-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+  border: 1px solid var(--border);
+}
+
+.column-drag-tag.active {
+  background: rgba(15, 98, 254, 0.08);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.column-drag-tag.active:hover {
+  background: rgba(15, 98, 254, 0.14);
+}
+
+.column-drag-tag.inactive {
+  background: var(--page-bg);
+  border-color: var(--border);
+  color: var(--muted-text);
+  opacity: 0.6;
+}
+
+.column-drag-tag.inactive:hover {
+  opacity: 0.85;
+  border-color: var(--muted-text);
+}
+
+.drag-handle {
+  cursor: grab;
+  color: var(--muted-text);
+  font-weight: bold;
+  opacity: 0.6;
+  margin-right: 2px;
+}
+
+.column-drag-tag:active {
+  cursor: grabbing;
+}
+
+.column-drag-tag:active .drag-handle {
+  cursor: grabbing;
+}
+
+.tag-sub {
+  font-size: 11px;
+  font-family: monospace;
+  opacity: 0.55;
+  font-weight: 400;
+}
+
