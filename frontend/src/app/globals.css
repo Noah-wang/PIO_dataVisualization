@@ -464,7 +464,9 @@ a {
 .column-heading {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
+  min-height: 38px;
+  justify-content: flex-start;
 }
 
 .column-heading .ant-tag {
