@@ -456,20 +456,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           }))}
                           onChange={(value) => handleFilterChange({ model: value })}
                         />
-                        <Select
-                          mode="multiple"
-                          allowClear
-                          maxTagCount={1}
-                          placeholder={workspace.roles.model_year ? `Model year (${workspace.roles.model_year})` : "Model year"}
-                          optionFilterProp="label"
-                          popupMatchSelectWidth={false}
-                          value={tableState.modelYear}
-                          options={workspace.filterOptions.modelYear.map((option) => ({
-                            label: `${option.label} (${option.count.toLocaleString()})`,
-                            value: option.value,
-                          }))}
-                          onChange={(value) => handleFilterChange({ modelYear: value })}
-                        />
+
                         <Select
                           mode="multiple"
                           allowClear
