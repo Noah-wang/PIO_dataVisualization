@@ -175,6 +175,17 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
     }
   }
 
+  function handleFilterChange(updates: Partial<TableState>) {
+    if (!workspace) return;
+    const nextState = {
+      ...tableState,
+      ...updates,
+      page: 1,
+    };
+    setTableState(nextState);
+    loadWorkspaceData(workspace.sheetName, nextState);
+  }
+
   function handleTableChange(
     pagination: TablePaginationConfig,
     _: Record<string, FilterValue | null>,
@@ -398,9 +409,16 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         <Input
                           allowClear
                           prefix={<SearchOutlined />}
-                          placeholder="Search key fields"
+                          placeholder="Search key fields (Press Enter)"
                           value={tableState.search}
-                          onChange={(event) => setTableState({ ...tableState, search: event.target.value })}
+                          onChange={(event) => {
+                            const val = event.target.value;
+                            setTableState({ ...tableState, search: val });
+                            if (!val) {
+                              handleFilterChange({ search: "" });
+                            }
+                          }}
+                          onPressEnter={() => handleFilterChange({ search: tableState.search })}
                         />
                         <Select
                           mode="multiple"
@@ -414,7 +432,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                             label: `${option.label} (${option.count.toLocaleString()})`,
                             value: option.value,
                           }))}
-                          onChange={(value) => setTableState({ ...tableState, brand: value })}
+                          onChange={(value) => handleFilterChange({ brand: value })}
                         />
                         <Select
                           mode="multiple"
@@ -429,7 +447,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                             label: `${option.label} (${option.count.toLocaleString()})`,
                             value: option.value,
                           }))}
-                          onChange={(value) => setTableState({ ...tableState, model: value })}
+                          onChange={(value) => handleFilterChange({ model: value })}
                         />
                         <Select
                           mode="multiple"
@@ -443,7 +461,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                             label: `${option.label} (${option.count.toLocaleString()})`,
                             value: option.value,
                           }))}
-                          onChange={(value) => setTableState({ ...tableState, modelYear: value })}
+                          onChange={(value) => handleFilterChange({ modelYear: value })}
                         />
                         <Select
                           mode="multiple"
@@ -458,7 +476,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                             label: `${option.label} (${option.count.toLocaleString()})`,
                             value: option.value,
                           }))}
-                          onChange={(value) => setTableState({ ...tableState, part: value })}
+                          onChange={(value) => handleFilterChange({ part: value })}
                         />
                         <RangePicker
                           value={
@@ -469,8 +487,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           minDate={workspace.filterOptions.dateRange.min ? dayjs(workspace.filterOptions.dateRange.min) : undefined}
                           maxDate={workspace.filterOptions.dateRange.max ? dayjs(workspace.filterOptions.dateRange.max) : undefined}
                           onChange={(values) =>
-                            setTableState({
-                              ...tableState,
+                            handleFilterChange({
                               startDate: values?.[0]?.format("YYYY-MM-DD") ?? "",
                               endDate: values?.[1]?.format("YYYY-MM-DD") ?? "",
                             })
@@ -488,9 +505,6 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                           }))}
                           onChange={setVisibleColumns}
                         />
-                        <Button type="primary" onClick={() => loadWorkspaceData(workspace.sheetName, { ...tableState, page: 1 })}>
-                          Apply filters
-                        </Button>
                         <Button
                           onClick={() => {
                             setTableState({ ...defaultTableState, pageSize: tableState.pageSize });
