@@ -413,7 +413,18 @@ def _build_workspace_payload(
             "startDate": start_date,
             "endDate": end_date,
         },
-        "filterOptions": _build_filter_options(bundle),
+        "filterOptions": _build_filter_options(
+            bundle,
+            search=search,
+            brand=brand,
+            model=model,
+            model_year=model_year,
+            part=part,
+            model_query=model_query,
+            part_query=part_query,
+            start_date=start_date,
+            end_date=end_date,
+        ),
     }
 
 
@@ -696,34 +707,82 @@ def _apply_filters(
     return df.loc[mask].copy()
 
 
-def _build_filter_options(bundle: DatasetBundle) -> dict[str, Any]:
-    options: dict[str, Any] = {
-        "dateRange": _filter_date_range(bundle),
-        "brand": [],
-        "model": [],
-        "modelYear": [],
-        "part": [],
-    }
+def _build_filter_options(
+    bundle: DatasetBundle,
+    search: str = "",
+    brand: list[str] | None = None,
+    model: list[str] | None = None,
+    model_year: list[str] | None = None,
+    part: list[str] | None = None,
+    model_query: str = "",
+    part_query: str = "",
+    start_date: str = "",
+    end_date: str = "",
+) -> dict[str, Any]:
+    brand = brand or []
+    model = model or []
+    model_year = model_year or []
+    part = part or []
+
+    date_range = _filter_date_range(bundle)
 
     brand_col = bundle.roles.get("brand")
     model_col = bundle.roles.get("model")
     model_year_col = bundle.roles.get("model_year")
     part_col = bundle.roles.get("part_description") or bundle.roles.get("part_number")
 
+    # 1. Brand options: apply all filters EXCEPT brand
     if brand_col and brand_col in bundle.dataframe.columns:
-        options["brand"] = _build_value_options(bundle.dataframe[brand_col], limit=25)
+        df_for_brand = _apply_filters(
+            bundle, search, brand=[], model=model, model_year=model_year, part=part,
+            model_query=model_query, part_query=part_query, start_date=start_date, end_date=end_date
+        )
+        brand_options = _build_value_options(df_for_brand[brand_col], limit=25)
+    else:
+        brand_options = []
+
+    # 2. Model options: apply all filters EXCEPT model
     if model_col and model_col in bundle.dataframe.columns:
-        options["model"] = _build_value_options(bundle.dataframe[model_col], limit=80)
+        df_for_model = _apply_filters(
+            bundle, search, brand=brand, model=[], model_year=model_year, part=part,
+            model_query=model_query, part_query=part_query, start_date=start_date, end_date=end_date
+        )
+        model_options = _build_value_options(df_for_model[model_col], limit=80)
+    else:
+        model_options = []
+
+    # 3. Model Year options: apply all filters EXCEPT model_year
     if model_year_col and model_year_col in bundle.dataframe.columns:
-        options["modelYear"] = _build_value_options(
-            _display_series_for_column(bundle, model_year_col),
+        df_for_my = _apply_filters(
+            bundle, search, brand=brand, model=model, model_year=[], part=part,
+            model_query=model_query, part_query=part_query, start_date=start_date, end_date=end_date
+        )
+        model_year_options = _build_value_options(
+            _display_series_for_column(bundle, model_year_col).loc[df_for_my.index],
             limit=20,
             sort_by_count=False,
         )
-    if part_col and part_col in bundle.dataframe.columns:
-        options["part"] = _build_value_options(bundle.dataframe[part_col], limit=120)
+    else:
+        model_year_options = []
 
-    return options
+    # 4. Part options: apply all filters EXCEPT part
+    if part_col and part_col in bundle.dataframe.columns:
+        df_for_part = _apply_filters(
+            bundle, search, brand=brand, model=model, model_year=model_year, part=[],
+            model_query=model_query, part_query=part_query, start_date=start_date, end_date=end_date
+        )
+        part_options = _build_value_options(df_for_part[part_col], limit=120)
+    else:
+        part_options = []
+
+    return {
+        "dateRange": date_range,
+        "brand": brand_options,
+        "model": model_options,
+        "modelYear": model_year_options,
+        "part": part_options,
+    }
+
 
 
 def _filter_date_range(bundle: DatasetBundle) -> dict[str, str | None]:
