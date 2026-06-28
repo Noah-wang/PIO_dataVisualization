@@ -366,6 +366,46 @@ a {
   gap: 18px;
 }
 
+.major-tab-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.major-tab-intro .ant-card-body {
+  padding: 20px 24px;
+}
+
+.major-tab-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.workspace-subtabs .ant-tabs-nav {
+  margin-bottom: 18px;
+}
+
+.workspace-subtabs .ant-tabs-nav::before {
+  border-bottom: 1px solid rgba(211, 221, 234, 0.72);
+}
+
+.workspace-subtabs .ant-tabs-tab {
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(248, 251, 255, 0.82);
+}
+
+.workspace-subtabs .ant-tabs-tab-active {
+  background: rgba(32, 84, 244, 0.08);
+}
+
+.workspace-subtabs .ant-tabs-ink-bar {
+  display: none;
+}
+
 .metric-card,
 .content-card,
 .chart-card {
@@ -792,4 +832,3 @@ a {
   opacity: 0.55;
   font-weight: 400;
 }
-

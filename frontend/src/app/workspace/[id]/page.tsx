@@ -37,11 +37,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import {
+  AnomalyCenterPayload,
   API_BASE_URL,
+  ForecastPayload,
   WorkbookMeta,
   WorkspacePayload,
   TableState,
   defaultTableState,
+  forecastChartOption,
   formatMetric,
   chartOption,
   buildWorkspaceParams,
@@ -64,7 +67,7 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   const [loading, setLoading] = useState(true);
   const [loadingMsg, setLoadingMsg] = useState("Restoring workspace\u2026");
   const [tableLoading, setTableLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("data");
   const [tableState, setTableState] = useState<TableState>(defaultTableState);
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
   const [columnOrder, setColumnOrder] = useState<string[]>([]);
@@ -73,6 +76,12 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   const [chartFilterState, setChartFilterState] = useState<TableState>(defaultTableState);
   const [chartData, setChartData] = useState<WorkspacePayload | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
+  const [anomalyData, setAnomalyData] = useState<AnomalyCenterPayload | null>(null);
+  const [anomalyLoading, setAnomalyLoading] = useState(false);
+  const [forecastData, setForecastData] = useState<ForecastPayload | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const [forecastPart, setForecastPart] = useState("");
+  const [forecastHorizon, setForecastHorizon] = useState(3);
 
   // Save custom column order to localStorage on change
   useEffect(() => {
@@ -214,6 +223,8 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
         const initialChartState = { ...defaultTableState, pageSize: state.pageSize };
         setChartFilterState(initialChartState);
         loadChartData(payload.sheetName, initialChartState);
+        loadAnomalyData(payload.sheetName, initialChartState);
+        loadForecastData(payload.sheetName, initialChartState, "", forecastHorizon);
       }
     } catch (err) {
       messageApi.error(err instanceof Error ? err.message : "Failed to load worksheet data.");
@@ -255,6 +266,51 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
     }
   }
 
+  async function loadForecastData(sheetName: string, state: TableState, nextPart = forecastPart, horizon = forecastHorizon) {
+    const params = buildWorkspaceParams({ ...state, page: 1, part: [] });
+    params.set("horizon", String(horizon));
+    if (nextPart) {
+      params.set("part_number", nextPart);
+    }
+
+    setForecastLoading(true);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/workbooks/${id}/sheets/${encodeURIComponent(sheetName)}/forecast?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error((await response.json()).detail ?? "Failed to load forecast view.");
+      }
+      const payload = (await response.json()) as ForecastPayload;
+      setForecastData(payload);
+      setForecastPart(payload.selectedPart);
+      setForecastHorizon(horizon);
+    } catch (err) {
+      messageApi.error(err instanceof Error ? err.message : "Failed to load forecast view.");
+    } finally {
+      setForecastLoading(false);
+    }
+  }
+
+  async function loadAnomalyData(sheetName: string, state: TableState) {
+    const params = buildWorkspaceParams({ ...state, page: 1 });
+    setAnomalyLoading(true);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/workbooks/${id}/sheets/${encodeURIComponent(sheetName)}/anomaly-center?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error((await response.json()).detail ?? "Failed to load anomaly center.");
+      }
+      const payload = (await response.json()) as AnomalyCenterPayload;
+      setAnomalyData(payload);
+    } catch (err) {
+      messageApi.error(err instanceof Error ? err.message : "Failed to load anomaly center.");
+    } finally {
+      setAnomalyLoading(false);
+    }
+  }
+
   function handleChartFilterChange(updates: Partial<TableState>) {
     if (!workspace) return;
     const nextState = {
@@ -271,6 +327,18 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
     setChartFilterState(tableState);
     loadChartData(workspace.sheetName, tableState);
     messageApi.success("Synchronized filter settings from Data Table");
+  }
+
+  function syncForecastFromTable() {
+    if (!workspace) return;
+    loadForecastData(workspace.sheetName, tableState, forecastPart, forecastHorizon);
+    messageApi.success("Forecast Center refreshed with current Data Table filters");
+  }
+
+  function syncAnomalyFromTable() {
+    if (!workspace) return;
+    loadAnomalyData(workspace.sheetName, tableState);
+    messageApi.success("Anomaly Center refreshed with current Data Table filters");
   }
 
   function handleDragStart(e: React.DragEvent, index: number) {
@@ -414,6 +482,14 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
         };
       });
 
+  const topAlert = anomalyData?.records[0] ?? null;
+  const analystPrompts = [
+    topAlert ? `Why did ${topAlert.part} move so sharply in ${topAlert.latestMonth}?` : "Why did the top alert part move so sharply last month?",
+    forecastData ? `Can the current forecast for ${forecastData.selectedPart} be trusted?` : "Can the current part-level forecast be trusted?",
+    "Which parts look like structural demand drops rather than normal monthly volatility?",
+    "Which alerts are explained by vehicle wholesale movement versus part-specific factors?",
+  ];
+
   return (
     <main className="page-shell">
       {contextHolder}
@@ -470,6 +546,25 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
             onChange={setActiveTab}
             className="workspace-tabs"
             items={[
+              {
+                key: "data",
+                label: "Data Workspace",
+                children: (
+                  <div className="major-tab-stack">
+                    <Card className="content-card major-tab-intro">
+                      <div className="major-tab-header">
+                        <div>
+                          <div className="eyebrow" style={{ marginBottom: 8 }}>Data Workspace</div>
+                          <Paragraph className="workspace-copy" style={{ marginBottom: 0 }}>
+                            Upload, inspect, filter, and export the business-ready data foundation before moving into forecasting and agent reasoning.
+                          </Paragraph>
+                        </div>
+                      </div>
+                    </Card>
+                    <Tabs
+                      className="workspace-subtabs"
+                      defaultActiveKey="overview"
+                      items={[
               {
                 key: "overview",
                 label: "Overview",
@@ -968,52 +1063,716 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                   </div>
                 ),
               },
+                      ]}
+                    />
+                  </div>
+                ),
+              },
               {
-                key: "classification",
-                label: "Field Classification",
+                key: "forecasting",
+                label: "Forecast Center",
                 children: (
-                  <div className="classification-stack">
-                    {Object.entries(workspace.classification).map(([group, fields]) => (
-                      <Card key={group} className="content-card" title={group}>
-                        <div className="field-grid">
-                          {fields.map((field) => (
-                            <div key={field.column} className="field-card">
-                              <div className="field-topline">
-                                <Text strong>{field.column}</Text>
-                                <Tag color={field.confidence === "High" ? "blue" : field.confidence === "Medium" ? "gold" : "default"}>
-                                  {field.confidence}
-                                </Tag>
-                              </div>
-                              <div className="field-meta">
-                                <div>
-                                  <label>Group</label>
-                                  <strong>{field.group}</strong>
-                                </div>
-                                <div>
-                                  <label>Role</label>
-                                  <strong>{field.detectedRole}</strong>
-                                </div>
-                                <div>
-                                  <label>Type</label>
-                                  <strong>{field.type}</strong>
-                                </div>
-                                <div>
-                                  <label>Missing</label>
-                                  <strong>{field.missingPct}%</strong>
-                                </div>
-                                <div>
-                                  <label>Unique</label>
-                                  <strong>{field.uniqueCount.toLocaleString()}</strong>
-                                </div>
-                              </div>
-                              <Paragraph className="field-sample" ellipsis={{ rows: 2 }}>
-                                {field.sampleValues || "No sample values available."}
-                              </Paragraph>
-                            </div>
-                          ))}
+                  <div className="major-tab-stack">
+                    <Card className="content-card major-tab-intro">
+                      <div className="major-tab-header">
+                        <div>
+                          <div className="eyebrow" style={{ marginBottom: 8 }}>Forecast Center</div>
+                          <Paragraph className="workspace-copy" style={{ marginBottom: 0 }}>
+                            Review anomaly signals, understand structural demand changes, and inspect part-level forecast confidence in one place.
+                          </Paragraph>
                         </div>
+                      </div>
+                    </Card>
+                    <Tabs
+                      className="workspace-subtabs"
+                      defaultActiveKey="anomaly"
+                      items={[
+              {
+                key: "anomaly",
+                label: "Anomaly Center",
+                children: (
+                  <div className="tab-stack">
+                    <Card className="content-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                        <div>
+                          <div className="eyebrow" style={{ marginBottom: 8 }}>V2 Anomaly Detection</div>
+                          <Paragraph className="workspace-copy" style={{ marginBottom: 0 }}>
+                            Anomaly Center scans the current filtered slice for structural drops, sudden ramps, unstable parts, and low-trust forecast zones.
+                          </Paragraph>
+                        </div>
+                        <Space wrap>
+                          <Button type="primary" onClick={syncAnomalyFromTable}>
+                            Refresh from Data Table
+                          </Button>
+                        </Space>
+                      </div>
+                    </Card>
+
+                    {anomalyLoading ? (
+                      <div className="loading-shell" style={{ minHeight: "40vh" }}>
+                        <div className="loading-card">
+                          <Spin size="large" />
+                          <p className="loading-msg">Scanning for structural demand changes…</p>
+                        </div>
+                      </div>
+                    ) : anomalyData ? (
+                      <>
+                        <Row gutter={[18, 18]}>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="Scanned parts" value={anomalyData.summary.scannedParts} />
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="Surfaced alerts" value={anomalyData.summary.surfacedAlerts} />
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="Structural breaks" value={anomalyData.summary.structuralBreaks} />
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="High forecast risk" value={anomalyData.summary.highRiskForecasts} />
+                            </Card>
+                          </Col>
+                        </Row>
+
+                        <Row gutter={[18, 18]}>
+                          <Col xs={24} xl={10}>
+                            <Card className="content-card" title="Why these alerts surfaced" style={{ height: "100%" }}>
+                              <div className="summary-stack">
+                                <div className="summary-row">
+                                  <span className="summary-dot" />
+                                  <span>The scanner ranks parts by recent change magnitude, anomaly months, regime shift shape, and backtest reliability.</span>
+                                </div>
+                                <div className="summary-row">
+                                  <span className="summary-dot" />
+                                  <span>Structural drops and ramps are treated as highest risk because historical moving averages usually miss these state changes.</span>
+                                </div>
+                                <div className="summary-row">
+                                  <span className="summary-dot" />
+                                  <span>Low-confidence forecasts are not hidden. They are surfaced so planners know where human review matters most.</span>
+                                </div>
+                              </div>
+                            </Card>
+                          </Col>
+                          <Col xs={24} xl={14}>
+                            <Card className="chart-card" title="Alert regime mix">
+                              {anomalyData.regimeBreakdown.length ? (
+                                <ReactECharts
+                                  option={chartOption(
+                                    "Alert regime mix",
+                                    anomalyData.regimeBreakdown.map((item) => item.label),
+                                    anomalyData.regimeBreakdown.map((item) => item.count),
+                                    "bar"
+                                  )}
+                                  style={{ height: 320 }}
+                                />
+                              ) : (
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No regime mix available for the current slice." />
+                              )}
+                            </Card>
+                          </Col>
+                        </Row>
+
+                        {anomalyData.records.length ? (
+                          <div className="classification-stack">
+                            {anomalyData.records.map((record) => (
+                              <Card
+                                key={record.part}
+                                className="content-card"
+                                title={`${record.part}${record.partDescription ? ` · ${record.partDescription}` : ""}`}
+                                extra={
+                                  <Space wrap size={8}>
+                                    <Tag color={record.forecastRisk === "High" ? "red" : record.forecastRisk === "Medium" ? "gold" : "blue"}>
+                                      {record.forecastRisk} forecast risk
+                                    </Tag>
+                                    <Tag color={record.confidence === "High" ? "blue" : record.confidence === "Medium" ? "gold" : "default"}>
+                                      {record.confidence} confidence
+                                    </Tag>
+                                    <Tag color={record.regimeSeverity === "High" ? "red" : record.regimeSeverity === "Medium" ? "gold" : "default"}>
+                                      {record.regime}
+                                    </Tag>
+                                  </Space>
+                                }
+                              >
+                                <Row gutter={[18, 18]}>
+                                  <Col xs={24} xl={8}>
+                                    <div className="health-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                                      <div>
+                                        <span className="health-label">Latest month</span>
+                                        <strong>{record.latestMonth}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="health-label">History months</span>
+                                        <strong>{record.historyMonths}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="health-label">Latest actual</span>
+                                        <strong>{formatMetric(record.latestActual)} pcs</strong>
+                                      </div>
+                                      <div>
+                                        <span className="health-label">Recent 3M avg</span>
+                                        <strong>{formatMetric(record.recent3MonthAverage)} pcs</strong>
+                                      </div>
+                                      <div>
+                                        <span className="health-label">MoM change</span>
+                                        <strong>{record.deltaPct !== null ? `${record.deltaPct >= 0 ? "+" : ""}${record.deltaPct.toFixed(1)}%` : "N/A"}</strong>
+                                      </div>
+                                      <div>
+                                        <span className="health-label">Backtest WAPE</span>
+                                        <strong>{record.wape !== null ? `${(record.wape * 100).toFixed(1)}%` : "N/A"}</strong>
+                                      </div>
+                                      <div style={{ gridColumn: "span 2" }}>
+                                        <span className="health-label">Next baseline forecast</span>
+                                        <strong>
+                                          {formatMetric(record.nextForecast)} pcs
+                                          {record.forecastDeltaPct !== null ? ` (${record.forecastDeltaPct >= 0 ? "+" : ""}${record.forecastDeltaPct.toFixed(1)}%)` : ""}
+                                        </strong>
+                                      </div>
+                                    </div>
+                                  </Col>
+                                  <Col xs={24} xl={8}>
+                                    <Card bordered={false} style={{ background: "rgba(248, 250, 255, 0.82)", height: "100%" }}>
+                                      <div style={{ fontWeight: 700, marginBottom: 10 }}>Evidence trail</div>
+                                      <div className="summary-stack">
+                                        {record.evidence.map((line) => (
+                                          <div key={line} className="summary-row">
+                                            <span className="summary-dot" />
+                                            <span>{line}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </Card>
+                                  </Col>
+                                  <Col xs={24} xl={8}>
+                                    <div style={{ display: "grid", gap: 16 }}>
+                                      <Card bordered={false} style={{ background: "rgba(248, 250, 255, 0.82)" }}>
+                                        <div style={{ fontWeight: 700, marginBottom: 10 }}>Wholesale-linked model</div>
+                                        {record.wholesaleSignal ? (
+                                          <div className="health-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                                            <div>
+                                              <span className="health-label">Link strength</span>
+                                              <strong>{record.wholesaleSignal.relationshipStrength}</strong>
+                                            </div>
+                                            <div>
+                                              <span className="health-label">Model WAPE</span>
+                                              <strong>{record.wholesaleSignal.modelWape !== null ? `${(record.wholesaleSignal.modelWape * 100).toFixed(1)}%` : "N/A"}</strong>
+                                            </div>
+                                            <div>
+                                              <span className="health-label">Wholesale delta</span>
+                                              <strong>{record.wholesaleSignal.wholesaleDeltaPct !== null ? `${record.wholesaleSignal.wholesaleDeltaPct >= 0 ? "+" : ""}${record.wholesaleSignal.wholesaleDeltaPct.toFixed(1)}%` : "N/A"}</strong>
+                                            </div>
+                                            <div>
+                                              <span className="health-label">Expected by model</span>
+                                              <strong>{formatMetric(record.wholesaleSignal.expectedFromModel)} pcs</strong>
+                                            </div>
+                                            <div style={{ gridColumn: "span 2" }}>
+                                              <span className="health-label">Unexplained residual</span>
+                                              <strong>
+                                                {record.wholesaleSignal.unexplainedResidualPct !== null
+                                                  ? `${record.wholesaleSignal.unexplainedResidualPct >= 0 ? "+" : ""}${record.wholesaleSignal.unexplainedResidualPct.toFixed(1)}%`
+                                                  : "N/A"}
+                                              </strong>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <Text type="secondary">No wholesale-linked model could be fit for this part with the current workbook structure.</Text>
+                                        )}
+                                      </Card>
+                                      <Card bordered={false} style={{ background: "rgba(248, 250, 255, 0.82)" }}>
+                                        <div style={{ fontWeight: 700, marginBottom: 10 }}>Brand drivers</div>
+                                        {record.brandDrivers.length ? (
+                                          <div className="summary-stack">
+                                            {record.brandDrivers.map((item) => (
+                                              <div key={`${record.part}-brand-${item.name}`} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                                <span>{item.name}</span>
+                                                <strong style={{ color: item.delta < 0 ? "#b42318" : "#155eef" }}>
+                                                  {item.delta >= 0 ? "+" : ""}{formatMetric(item.delta)}
+                                                </strong>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <Text type="secondary">No brand-level shift surfaced in this slice.</Text>
+                                        )}
+                                      </Card>
+                                      <Card bordered={false} style={{ background: "rgba(248, 250, 255, 0.82)" }}>
+                                        <div style={{ fontWeight: 700, marginBottom: 10 }}>Model drivers</div>
+                                        {record.modelDrivers.length ? (
+                                          <div className="summary-stack">
+                                            {record.modelDrivers.map((item) => (
+                                              <div key={`${record.part}-model-${item.name}`} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                                <span>{item.name}</span>
+                                                <strong style={{ color: item.delta < 0 ? "#b42318" : "#155eef" }}>
+                                                  {item.delta >= 0 ? "+" : ""}{formatMetric(item.delta)}
+                                                </strong>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <Text type="secondary">No model-level shift surfaced in this slice.</Text>
+                                        )}
+                                      </Card>
+                                    </div>
+                                  </Col>
+                                </Row>
+                              </Card>
+                            ))}
+                          </div>
+                        ) : (
+                          <Card className="content-card">
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No anomaly alerts surfaced for the current slice." />
+                          </Card>
+                        )}
+                      </>
+                    ) : (
+                      <Card className="content-card">
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Anomaly center data is not available for this worksheet yet." />
                       </Card>
-                    ))}
+                    )}
+                  </div>
+                ),
+              },
+              {
+                key: "forecast",
+                label: "Forecast Center",
+                children: (
+                  <div className="tab-stack">
+                    <Card className="content-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                        <div>
+                          <div className="eyebrow" style={{ marginBottom: 8 }}>Part-Month Baseline Forecast</div>
+                          <Paragraph className="workspace-copy" style={{ marginBottom: 0 }}>
+                            Forecast Center uses the current Data Table filters for brand, model, model year, search, and date range.
+                          </Paragraph>
+                        </div>
+                        <Space wrap>
+                          <Select
+                            showSearch
+                            style={{ minWidth: 320 }}
+                            placeholder="Select a part number"
+                            optionFilterProp="label"
+                            value={forecastPart || undefined}
+                            options={forecastData?.partOptions.map((option) => ({
+                              label: `${option.value}${option.description ? ` · ${option.description}` : ""}`,
+                              value: option.value,
+                            })) ?? []}
+                            onChange={(value) => {
+                              setForecastPart(value);
+                              loadForecastData(workspace.sheetName, tableState, value, forecastHorizon);
+                            }}
+                          />
+                          <Select
+                            style={{ width: 160 }}
+                            value={forecastHorizon}
+                            options={[
+                              { label: "1 month", value: 1 },
+                              { label: "3 months", value: 3 },
+                              { label: "6 months", value: 6 },
+                              { label: "12 months", value: 12 },
+                            ]}
+                            onChange={(value) => {
+                              setForecastHorizon(value);
+                              loadForecastData(workspace.sheetName, tableState, forecastPart, value);
+                            }}
+                          />
+                          <Button type="primary" onClick={syncForecastFromTable}>
+                            Refresh from Data Table
+                          </Button>
+                        </Space>
+                      </div>
+                    </Card>
+
+                    {forecastLoading ? (
+                      <div className="loading-shell" style={{ minHeight: "40vh" }}>
+                        <div className="loading-card">
+                          <Spin size="large" />
+                          <p className="loading-msg">Building part-level forecast…</p>
+                        </div>
+                      </div>
+                    ) : forecastData ? (
+                      <>
+                        <Row gutter={[18, 18]}>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="Next month forecast" value={formatMetric(forecastData.summary.nextForecast)} suffix="pcs" />
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="Latest actual month" value={formatMetric(forecastData.summary.latestActual)} suffix="pcs" />
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="Recent 3-month average" value={formatMetric(forecastData.summary.recent3MonthAverage)} suffix="pcs" />
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12} xl={6}>
+                            <Card className="metric-card">
+                              <Statistic title="Backtest WAPE" value={forecastData.summary.wape !== null ? `${(forecastData.summary.wape * 100).toFixed(1)}%` : "N/A"} />
+                            </Card>
+                          </Col>
+                        </Row>
+
+                        <Row gutter={[18, 18]}>
+                          <Col xs={24} xl={16}>
+                            <Card
+                              className="chart-card"
+                              title={`${forecastData.selectedPart}${forecastData.partDescription ? ` · ${forecastData.partDescription}` : ""}`}
+                              extra={<Tag color={forecastData.summary.confidence === "High" ? "blue" : forecastData.summary.confidence === "Medium" ? "gold" : "default"}>{forecastData.summary.confidence} confidence</Tag>}
+                            >
+                              <ReactECharts option={forecastChartOption(forecastData)} style={{ height: 360 }} />
+                            </Card>
+                          </Col>
+                          <Col xs={24} xl={8}>
+                            <Card className="content-card" title="Model readout" style={{ height: "100%" }}>
+                              <div className="health-grid" style={{ gridTemplateColumns: "1fr 1fr", rowGap: 12 }}>
+                                <div>
+                                  <span className="health-label">Model</span>
+                                  <strong>{forecastData.summary.modelName.replaceAll("_", " ")}</strong>
+                                </div>
+                                <div>
+                                  <span className="health-label">History months</span>
+                                  <strong>{forecastData.summary.historyMonths}</strong>
+                                </div>
+                                <div>
+                                  <span className="health-label">MAE</span>
+                                  <strong>{forecastData.summary.mae !== null ? formatMetric(forecastData.summary.mae) : "N/A"}</strong>
+                                </div>
+                                <div>
+                                  <span className="health-label">Bias</span>
+                                  <strong>{forecastData.summary.bias !== null ? `${(forecastData.summary.bias * 100).toFixed(1)}%` : "N/A"}</strong>
+                                </div>
+                                <div>
+                                  <span className="health-label">Data path</span>
+                                  <strong>{forecastData.summary.preprocessing === "cleaned" ? "Anomaly-softened" : "Raw history"}</strong>
+                                </div>
+                                <div>
+                                  <span className="health-label">WAPE</span>
+                                  <strong>{forecastData.summary.wape !== null ? `${(forecastData.summary.wape * 100).toFixed(1)}%` : "N/A"}</strong>
+                                </div>
+                                <div style={{ gridColumn: "span 2", borderTop: "1px solid #f0f4f9", paddingTop: 10 }}>
+                                  <span className="health-label">Next month change</span>
+                                  <strong>
+                                    {forecastData.summary.deltaPct !== null
+                                      ? `${forecastData.summary.deltaPct >= 0 ? "+" : ""}${forecastData.summary.deltaPct.toFixed(1)}%`
+                                      : "N/A"}
+                                  </strong>
+                                </div>
+                                {forecastData.summary.selectionBasis ? (
+                                  <div style={{ gridColumn: "span 2", borderTop: "1px solid #f0f4f9", paddingTop: 10 }}>
+                                    <span className="health-label">Selection logic</span>
+                                    <strong style={{ fontSize: 13, lineHeight: 1.5 }}>{forecastData.summary.selectionBasis}</strong>
+                                  </div>
+                                ) : null}
+                                {forecastData.summary.adjustedMonths > 0 ? (
+                                  <div style={{ gridColumn: "span 2" }}>
+                                    <span className="health-label">Adjusted anomaly months</span>
+                                    <strong>{forecastData.summary.adjustedMonths}</strong>
+                                  </div>
+                                ) : null}
+                                {forecastData.summary.candidateScores.length ? (
+                                  <div style={{ gridColumn: "span 2" }}>
+                                    <span className="health-label">Candidate WAPE ranking</span>
+                                    <div className="summary-stack" style={{ marginTop: 8 }}>
+                                      {forecastData.summary.candidateScores.slice(0, 4).map((item) => (
+                                        <div key={`${item.model}-${item.preprocessing ?? "raw"}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: "1px solid #f0f4f9" }}>
+                                          <span>{(item.label ?? item.model).replaceAll("_", " ")}</span>
+                                          <strong>{item.wape !== null ? `${(item.wape * 100).toFixed(1)}%` : "N/A"}</strong>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </Card>
+                          </Col>
+                        </Row>
+
+                        <Row gutter={[18, 18]}>
+                          <Col xs={24} xl={12}>
+                            <Card className="content-card" title="Forecast interpretation" style={{ height: "100%" }}>
+                              <div className="summary-stack">
+                                {forecastData.insights.map((line) => (
+                                  <div key={line} className="summary-row">
+                                    <span className="summary-dot" />
+                                    <span>{line}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </Card>
+                          </Col>
+                          <Col xs={24} xl={12}>
+                            <Card className="content-card" title="Latest change explanation" style={{ height: "100%" }}>
+                              {forecastData.changeAnalysis ? (
+                                <div className="summary-stack">
+                                  {forecastData.changeAnalysis.notes.map((line) => (
+                                    <div key={line} className="summary-row">
+                                      <span className="summary-dot" />
+                                      <span>{line}</span>
+                                    </div>
+                                  ))}
+                                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f0f4f9" }}>
+                                    <div style={{ color: "#607087", fontSize: 12, marginBottom: 6 }}>
+                                      {forecastData.changeAnalysis.previousMonth} {"->"} {forecastData.changeAnalysis.latestMonth}
+                                    </div>
+                                    <strong>
+                                      {formatMetric(forecastData.changeAnalysis.previousActual)} pcs {"->"} {formatMetric(forecastData.changeAnalysis.latestActual)} pcs
+                                    </strong>
+                                  </div>
+                                </div>
+                              ) : (
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Not enough complete months to explain the latest change." />
+                              )}
+                            </Card>
+                          </Col>
+                        </Row>
+
+                        <Row gutter={[18, 18]}>
+                          <Col xs={24} xl={12}>
+                            <Card className="content-card" title="Anomaly radar" style={{ height: "100%" }}>
+                              {forecastData.anomalies.length ? (
+                                <div className="summary-stack">
+                                  {forecastData.anomalies.map((item) => (
+                                    <div key={item.month} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid #f0f4f9" }}>
+                                      <div>
+                                        <Text strong>{item.month}</Text>
+                                        <div style={{ color: "#607087", fontSize: 12 }}>
+                                          Actual {formatMetric(item.actual)} pcs
+                                          {item.baseline !== null ? ` vs baseline ${formatMetric(item.baseline)} pcs` : ""}
+                                        </div>
+                                      </div>
+                                      <div style={{ textAlign: "right" }}>
+                                        <div style={{ fontWeight: 700, color: item.deltaPct !== null && item.deltaPct < 0 ? "#b42318" : "#155eef" }}>
+                                          {item.deltaPct !== null ? `${item.deltaPct >= 0 ? "+" : ""}${item.deltaPct.toFixed(1)}%` : "N/A"}
+                                        </div>
+                                        <Tag color={item.severity === "High" ? "red" : "gold"} style={{ marginInlineEnd: 0 }}>
+                                          {item.severity}
+                                        </Tag>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No statistically notable anomaly months were detected yet." />
+                              )}
+                            </Card>
+                          </Col>
+                          <Col xs={24} xl={12}>
+                            <Card className="content-card" title="Primary drivers" style={{ height: "100%" }}>
+                              {forecastData.changeAnalysis ? (
+                                <div style={{ display: "grid", gap: 16 }}>
+                                  <div>
+                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Brand contribution</div>
+                                    {forecastData.changeAnalysis.brandDrivers.length ? (
+                                      <div className="summary-stack">
+                                        {forecastData.changeAnalysis.brandDrivers.map((item) => (
+                                          <div key={`brand-${item.name}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: "1px solid #f0f4f9" }}>
+                                            <span>{item.name}</span>
+                                            <strong style={{ color: item.delta < 0 ? "#b42318" : "#155eef" }}>
+                                              {item.delta >= 0 ? "+" : ""}{formatMetric(item.delta)} pcs
+                                            </strong>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <Text type="secondary">No brand-level driver signal in the current slice.</Text>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Model contribution</div>
+                                    {forecastData.changeAnalysis.modelDrivers.length ? (
+                                      <div className="summary-stack">
+                                        {forecastData.changeAnalysis.modelDrivers.map((item) => (
+                                          <div key={`model-${item.name}`} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "6px 0", borderBottom: "1px solid #f0f4f9" }}>
+                                            <span>{item.name}</span>
+                                            <strong style={{ color: item.delta < 0 ? "#b42318" : "#155eef" }}>
+                                              {item.delta >= 0 ? "+" : ""}{formatMetric(item.delta)} pcs
+                                            </strong>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <Text type="secondary">No model-level driver signal in the current slice.</Text>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Driver breakdown becomes available once at least two complete months exist." />
+                              )}
+                            </Card>
+                          </Col>
+                        </Row>
+
+                        <Row gutter={[18, 18]}>
+                          <Col xs={24}>
+                            <Card className="content-card" title="Recommended watchlist" style={{ height: "100%" }}>
+                              {forecastData.watchlist.length ? (
+                                <div className="summary-stack">
+                                  {forecastData.watchlist.map((item) => (
+                                    <div key={item.part} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid #f0f4f9" }}>
+                                      <div>
+                                        <Text strong>{item.part}</Text>
+                                        <div style={{ color: "#607087", fontSize: 12 }}>
+                                          Latest {formatMetric(item.latestActual)} pcs {"->"} Forecast {formatMetric(item.nextForecast)} pcs
+                                        </div>
+                                      </div>
+                                      <div style={{ textAlign: "right" }}>
+                                        <div style={{ fontWeight: 700, color: item.deltaPct !== null && item.deltaPct < 0 ? "#b42318" : "#155eef" }}>
+                                          {item.deltaPct !== null ? `${item.deltaPct >= 0 ? "+" : ""}${item.deltaPct.toFixed(1)}%` : "N/A"}
+                                        </div>
+                                        <Tag color={item.confidence === "High" ? "blue" : item.confidence === "Medium" ? "gold" : "default"} style={{ marginInlineEnd: 0 }}>
+                                          {item.confidence}
+                                        </Tag>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No watchlist signals available for the current slice." />
+                              )}
+                            </Card>
+                          </Col>
+                        </Row>
+                      </>
+                    ) : (
+                      <Card className="content-card">
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Forecast data is not available for this worksheet yet." />
+                      </Card>
+                    )}
+                  </div>
+                ),
+              },
+                      ]}
+                    />
+                  </div>
+                ),
+              },
+              {
+                key: "agent",
+                label: "AI Analyst",
+                children: (
+                  <div className="major-tab-stack">
+                    <Card className="content-card major-tab-intro">
+                      <div className="major-tab-header">
+                        <div>
+                          <div className="eyebrow" style={{ marginBottom: 8 }}>AI Analyst</div>
+                          <Paragraph className="workspace-copy" style={{ marginBottom: 0 }}>
+                            This workspace is where the future agent will investigate demand shifts, challenge weak forecasts, and answer planning questions from trusted data tools.
+                          </Paragraph>
+                        </div>
+                        <Tag color="blue">Agent-ready foundation</Tag>
+                      </div>
+                    </Card>
+
+                    <Row gutter={[18, 18]}>
+                      <Col xs={24} md={12} xl={6}>
+                        <Card className="metric-card">
+                          <Statistic title="Rows in scope" value={workspace.profile.row_count} />
+                        </Card>
+                      </Col>
+                      <Col xs={24} md={12} xl={6}>
+                        <Card className="metric-card">
+                          <Statistic title="Alerts ready" value={anomalyData?.summary.surfacedAlerts ?? 0} />
+                        </Card>
+                      </Col>
+                      <Col xs={24} md={12} xl={6}>
+                        <Card className="metric-card">
+                          <Statistic title="High-risk forecasts" value={anomalyData?.summary.highRiskForecasts ?? 0} />
+                        </Card>
+                      </Col>
+                      <Col xs={24} md={12} xl={6}>
+                        <Card className="metric-card">
+                          <Statistic title="Selected forecast confidence" value={forecastData?.summary.confidence ?? "N/A"} />
+                        </Card>
+                      </Col>
+                    </Row>
+
+                    <Row gutter={[18, 18]}>
+                      <Col xs={24} xl={10}>
+                        <Card className="content-card" title="Suggested Analyst Questions" style={{ height: "100%" }}>
+                          <div className="summary-stack">
+                            {analystPrompts.map((prompt) => (
+                              <div key={prompt} className="summary-row">
+                                <span className="summary-dot" />
+                                <span>{prompt}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </Card>
+                      </Col>
+                      <Col xs={24} xl={7}>
+                        <Card className="content-card" title="Current Best Lead" style={{ height: "100%" }}>
+                          {topAlert ? (
+                            <div className="summary-stack">
+                              <div className="summary-row">
+                                <span className="summary-dot" />
+                                <span>
+                                  <strong>{topAlert.part}</strong>
+                                  {topAlert.partDescription ? ` · ${topAlert.partDescription}` : ""}
+                                </span>
+                              </div>
+                              <div className="summary-row">
+                                <span className="summary-dot" />
+                                <span>{topAlert.regime} with {topAlert.forecastRisk.toLowerCase()} forecast risk.</span>
+                              </div>
+                              {topAlert.evidence.slice(0, 3).map((line) => (
+                                <div key={line} className="summary-row">
+                                  <span className="summary-dot" />
+                                  <span>{line}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No anomaly lead is available yet." />
+                          )}
+                        </Card>
+                      </Col>
+                      <Col xs={24} xl={7}>
+                        <Card className="content-card" title="Trusted Tool Chain" style={{ height: "100%" }}>
+                          <div className="summary-stack">
+                            <div className="summary-row">
+                              <span className="summary-dot" />
+                              <span>Structured sheet parsing and field classification</span>
+                            </div>
+                            <div className="summary-row">
+                              <span className="summary-dot" />
+                              <span>Anomaly scoring with regime detection and backtest evidence</span>
+                            </div>
+                            <div className="summary-row">
+                              <span className="summary-dot" />
+                              <span>Part-level forecast with confidence, WAPE, bias, and watchlist outputs</span>
+                            </div>
+                            <div className="summary-row">
+                              <span className="summary-dot" />
+                              <span>Wholesale-linked model signals where a learnable relationship exists</span>
+                            </div>
+                          </div>
+                        </Card>
+                      </Col>
+                    </Row>
+
+                    <Card className="content-card" title="Agent Roadmap">
+                      <div className="summary-stack">
+                        <div className="summary-row">
+                          <span className="summary-dot" />
+                          <span>Next step: let the agent call anomaly, forecast, and wholesale-linked tools instead of inventing explanations.</span>
+                        </div>
+                        <div className="summary-row">
+                          <span className="summary-dot" />
+                          <span>Then add guided outputs such as: root-cause hypotheses, confidence-ranked explanations, and recommended planner actions.</span>
+                        </div>
+                        <div className="summary-row">
+                          <span className="summary-dot" />
+                          <span>After that, connect the same tool chain to forecast overrides, penetration analysis, and inventory recommendations.</span>
+                        </div>
+                      </div>
+                    </Card>
                   </div>
                 ),
               },

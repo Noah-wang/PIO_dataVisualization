@@ -16,6 +16,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from pio_platform.data_loader import DatasetBundle, list_workbook_sheets, load_dataset
+from pio_platform.forecasting import (
+    build_anomaly_center,
+    build_forecast_narrative,
+    build_monthly_part_series,
+    build_watchlist,
+    detect_series_anomalies,
+    explain_latest_change,
+    forecast_band,
+    forecast_history,
+    preprocess_history,
+    select_best_model,
+)
 from pio_platform.profiling import build_column_profile, build_insights, compute_kpis
 
 
@@ -316,6 +328,62 @@ def get_workspace(
         part_query=part_query,
         sort_field=sort_field,
         sort_order=sort_order,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@app.get("/api/workbooks/{workbook_id}/sheets/{sheet_name}/forecast")
+def get_part_forecast(
+    workbook_id: str,
+    sheet_name: str,
+    part_number: str = Query(default=""),
+    horizon: int = Query(default=3, ge=1, le=12),
+    search: str = Query(default=""),
+    brand: list[str] = Query(default=[]),
+    model: list[str] = Query(default=[]),
+    model_year: list[str] = Query(default=[]),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+) -> dict[str, Any]:
+    session = _get_session(workbook_id)
+    bundle = _get_bundle(session, sheet_name)
+    return _build_forecast_payload(
+        bundle=bundle,
+        part_number=part_number,
+        horizon=horizon,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@app.get("/api/workbooks/{workbook_id}/sheets/{sheet_name}/anomaly-center")
+def get_anomaly_center(
+    workbook_id: str,
+    sheet_name: str,
+    search: str = Query(default=""),
+    brand: list[str] = Query(default=[]),
+    model: list[str] = Query(default=[]),
+    model_year: list[str] = Query(default=[]),
+    part: list[str] = Query(default=[]),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+) -> dict[str, Any]:
+    session = _get_session(workbook_id)
+    bundle = _get_bundle(session, sheet_name)
+    wholesale_bundle = _find_wholesale_bundle(session, exclude_sheet=sheet_name)
+    return _build_anomaly_center_payload(
+        bundle=bundle,
+        wholesale_bundle=wholesale_bundle,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        part=part,
         start_date=start_date,
         end_date=end_date,
     )
@@ -978,6 +1046,281 @@ def _build_filter_options(
         "modelYear": model_year_options,
         "part": part_options,
     }
+
+
+def _build_forecast_payload(
+    bundle: DatasetBundle,
+    part_number: str,
+    horizon: int,
+    search: str,
+    brand: list[str],
+    model: list[str],
+    model_year: list[str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, Any]:
+    date_col = bundle.roles.get("date")
+    qty_col = bundle.roles.get("installation_quantity")
+    brand_col = bundle.roles.get("brand")
+    model_col = bundle.roles.get("model")
+    part_number_col = bundle.roles.get("part_number")
+    part_description_col = bundle.roles.get("part_description")
+
+    if not date_col or date_col not in bundle.date_candidates:
+        raise HTTPException(status_code=400, detail="Forecasting requires a reliable date field.")
+    if not qty_col or qty_col not in bundle.dataframe.columns:
+        raise HTTPException(status_code=400, detail="Forecasting requires an installation quantity field.")
+    if not part_number_col or part_number_col not in bundle.dataframe.columns:
+        raise HTTPException(status_code=400, detail="Forecasting requires a part number field.")
+
+    filtered = _apply_filters(
+        bundle,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        part=[],
+        model_query="",
+        part_query="",
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if filtered.empty:
+        raise HTTPException(status_code=400, detail="No rows remain after applying the selected forecast filters.")
+
+    part_options = _build_part_number_options(
+        filtered,
+        part_number_col=part_number_col,
+        qty_col=qty_col,
+        description_col=part_description_col,
+        limit=120,
+    )
+    if not part_options:
+        raise HTTPException(status_code=400, detail="No part numbers are available for forecasting in the selected slice.")
+
+    selected_part = part_number or part_options[0]["value"]
+    part_series = build_monthly_part_series(
+        filtered,
+        part_col=part_number_col,
+        qty_col=qty_col,
+        date_series=bundle.date_candidates[date_col],
+        part_value=selected_part,
+    )
+    if part_series.empty:
+        raise HTTPException(status_code=404, detail="The selected part does not have a usable monthly history.")
+
+    history = part_series["actual"].astype(float).tolist()
+    model_name, candidate_scores, diagnostics = select_best_model(history)
+    forecast_input, adjusted_points = preprocess_history(history, diagnostics.preprocessing)
+    forecast_values = forecast_history(forecast_input, horizon=horizon, model_name=model_name)
+    bands = forecast_band(history, forecast_values, diagnostics)
+    narrative = build_forecast_narrative(history, forecast_values, diagnostics)
+    anomalies = detect_series_anomalies(part_series)
+    change_analysis = explain_latest_change(
+        filtered,
+        part_col=part_number_col,
+        qty_col=qty_col,
+        date_series=bundle.date_candidates[date_col],
+        part_value=selected_part,
+        brand_col=brand_col,
+        model_col=model_col,
+    )
+
+    future_months = pd.date_range(part_series["month"].max() + pd.offsets.MonthBegin(1), periods=horizon, freq="MS")
+    forecast_rows = [
+        {
+            "month": month.strftime("%Y-%m"),
+            "actual": None,
+            "forecast": band["forecast"],
+            "lower": band["lower"],
+            "upper": band["upper"],
+        }
+        for month, band in zip(future_months, bands)
+    ]
+    history_rows = [
+        {
+            "month": month.strftime("%Y-%m"),
+            "actual": float(actual),
+            "forecast": None,
+            "lower": None,
+            "upper": None,
+        }
+        for month, actual in zip(part_series["month"], part_series["actual"])
+    ]
+
+    description = None
+    if part_description_col and part_description_col in filtered.columns:
+        desc_series = (
+            filtered.loc[filtered[part_number_col].fillna("").astype(str) == selected_part, part_description_col]
+            .dropna()
+            .astype(str)
+        )
+        if not desc_series.empty:
+            description = desc_series.mode().iloc[0]
+
+    recent_avg = float(pd.Series(history[-3:]).mean()) if history else 0.0
+    latest_actual = float(history[-1]) if history else 0.0
+    next_forecast = float(forecast_values[0]) if forecast_values else 0.0
+    delta_pct = ((next_forecast - latest_actual) / latest_actual * 100) if latest_actual else None
+
+    return {
+        "selectedPart": selected_part,
+        "partDescription": description,
+        "partOptions": part_options,
+        "summary": {
+            "historyMonths": diagnostics.history_months,
+            "horizon": horizon,
+            "modelName": diagnostics.model_name,
+            "confidence": diagnostics.confidence,
+            "preprocessing": diagnostics.preprocessing,
+            "selectionBasis": diagnostics.selection_basis,
+            "adjustedMonths": adjusted_points,
+            "candidateScores": candidate_scores,
+            "latestActual": latest_actual,
+            "recent3MonthAverage": recent_avg,
+            "nextForecast": next_forecast,
+            "deltaPct": float(delta_pct) if delta_pct is not None else None,
+            "mae": diagnostics.mae,
+            "wape": diagnostics.wape,
+            "bias": diagnostics.bias,
+        },
+        "series": history_rows + forecast_rows,
+        "insights": narrative,
+        "anomalies": anomalies,
+        "changeAnalysis": change_analysis,
+        "watchlist": build_watchlist(
+            filtered,
+            part_col=part_number_col,
+            qty_col=qty_col,
+            date_series=bundle.date_candidates[date_col],
+            limit=8,
+        ),
+    }
+
+
+def _build_anomaly_center_payload(
+    bundle: DatasetBundle,
+    wholesale_bundle: DatasetBundle | None,
+    search: str,
+    brand: list[str],
+    model: list[str],
+    model_year: list[str],
+    part: list[str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, Any]:
+    date_col = bundle.roles.get("date")
+    qty_col = bundle.roles.get("installation_quantity")
+    brand_col = bundle.roles.get("brand")
+    model_col = bundle.roles.get("model")
+    part_number_col = bundle.roles.get("part_number")
+    part_description_col = bundle.roles.get("part_description")
+
+    if not date_col or date_col not in bundle.date_candidates:
+        raise HTTPException(status_code=400, detail="Anomaly Center requires a reliable date field.")
+    if not qty_col or qty_col not in bundle.dataframe.columns:
+        raise HTTPException(status_code=400, detail="Anomaly Center requires an installation quantity field.")
+    if not part_number_col or part_number_col not in bundle.dataframe.columns:
+        raise HTTPException(status_code=400, detail="Anomaly Center requires a part number field.")
+
+    filtered = _apply_filters(
+        bundle,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        part=part,
+        model_query="",
+        part_query="",
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if filtered.empty:
+        raise HTTPException(status_code=400, detail="No rows remain after applying the selected anomaly filters.")
+
+    anomaly_center = build_anomaly_center(
+        filtered,
+        part_col=part_number_col,
+        qty_col=qty_col,
+        date_series=bundle.date_candidates[date_col],
+        brand_col=brand_col,
+        model_col=model_col,
+        part_description_col=part_description_col,
+        wholesale_df=wholesale_bundle.dataframe if wholesale_bundle else None,
+        limit=12,
+    )
+    anomaly_center["filters"] = {
+        "search": search,
+        "brand": brand,
+        "model": model,
+        "modelYear": model_year,
+        "part": part,
+        "startDate": start_date,
+        "endDate": end_date,
+    }
+    return anomaly_center
+
+
+def _find_wholesale_bundle(session: WorkbookSession, exclude_sheet: str | None = None) -> DatasetBundle | None:
+    for candidate in session.sheet_names:
+        if exclude_sheet and candidate == exclude_sheet:
+            continue
+        if "wholesale" in candidate.lower():
+            try:
+                return _get_bundle(session, candidate)
+            except Exception:
+                return None
+    return None
+
+
+def _build_part_number_options(
+    df: pd.DataFrame,
+    part_number_col: str,
+    qty_col: str,
+    description_col: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    working = df.copy()
+    working["__part"] = working[part_number_col].fillna("").astype(str)
+    working["__qty"] = pd.to_numeric(working[qty_col], errors="coerce").fillna(0.0)
+    working = working[working["__part"] != ""]
+    if working.empty:
+        return []
+
+    grouped = (
+        working.groupby("__part", dropna=True)
+        .agg(count=("__part", "size"), quantity=("__qty", "sum"))
+        .sort_values(by=["quantity", "count"], ascending=False)
+        .head(limit)
+        .reset_index()
+    )
+
+    descriptions: dict[str, str] = {}
+    if description_col and description_col in working.columns:
+        desc_df = working[[part_number_col, description_col]].dropna().copy()
+        if not desc_df.empty:
+            desc_df[part_number_col] = desc_df[part_number_col].astype(str)
+            descriptions = (
+                desc_df.groupby(part_number_col)[description_col]
+                .agg(lambda values: values.astype(str).mode().iloc[0])
+                .to_dict()
+            )
+
+    options = []
+    for row in grouped.to_dict("records"):
+        part_value = row["__part"]
+        description = descriptions.get(part_value)
+        label = f"{part_value} · {description}" if description else part_value
+        options.append(
+            {
+                "label": label,
+                "value": part_value,
+                "description": description,
+                "count": int(row["count"]),
+                "quantity": float(row["quantity"]),
+            }
+        )
+    return options
 
 
 

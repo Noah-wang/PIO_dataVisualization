@@ -1,6 +1,6 @@
 import dayjs from "dayjs";
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export type WorkbookMeta = {
   id: string;
@@ -14,6 +14,12 @@ export type Kpis = {
   "Total Installation Quantity": number | null;
   "Total Sales Revenue": number | null;
   "Distinct Part Count": number | null;
+};
+
+export type LeaderMetric = {
+  name: string;
+  value: number;
+  metric: "Revenue" | "Quantity";
 };
 
 export type WorkspacePayload = {
@@ -39,6 +45,17 @@ export type WorkspacePayload = {
       highMissingFields: string[];
     };
     autoInsights: string[];
+    leaders: {
+      topBrand?: LeaderMetric;
+      topModel?: LeaderMetric;
+      topPart?: LeaderMetric;
+    };
+    stats?: {
+      avgUnitPrice?: number;
+      avgQtyPerRow?: number;
+      avgRevPerRow?: number;
+      completenessRate?: number;
+    };
   };
   table: {
     columns: Array<{ key: string; title: string; role: string; type: string }>;
@@ -94,6 +111,163 @@ export type TableState = {
   pageSize: number;
   sortField: string;
   sortOrder: string;
+};
+
+export type ForecastPayload = {
+  selectedPart: string;
+  partDescription: string | null;
+  partOptions: Array<{
+    label: string;
+    value: string;
+    description: string | null;
+    count: number;
+    quantity: number;
+  }>;
+  summary: {
+    historyMonths: number;
+    horizon: number;
+    modelName: string;
+    confidence: string;
+    preprocessing: string;
+    selectionBasis: string | null;
+    adjustedMonths: number;
+    candidateScores: Array<{
+      model: string;
+      label?: string;
+      preprocessing?: string;
+      adjustedMonths?: number;
+      mae: number | null;
+      wape: number | null;
+      bias: number | null;
+    }>;
+    latestActual: number;
+    recent3MonthAverage: number;
+    nextForecast: number;
+    deltaPct: number | null;
+    mae: number | null;
+    wape: number | null;
+    bias: number | null;
+  };
+  series: Array<{
+    month: string;
+    actual: number | null;
+    forecast: number | null;
+    lower: number | null;
+    upper: number | null;
+  }>;
+  insights: string[];
+  anomalies: Array<{
+    month: string;
+    actual: number;
+    baseline: number | null;
+    deltaPct: number | null;
+    severity: string;
+  }>;
+  changeAnalysis: {
+    latestMonth: string;
+    previousMonth: string;
+    latestActual: number;
+    previousActual: number;
+    delta: number;
+    deltaPct: number | null;
+    notes: string[];
+    brandDrivers: Array<{
+      name: string;
+      latest: number;
+      previous: number;
+      delta: number;
+    }>;
+    modelDrivers: Array<{
+      name: string;
+      latest: number;
+      previous: number;
+      delta: number;
+    }>;
+  } | null;
+  watchlist: Array<{
+    part: string;
+    latestActual: number;
+    nextForecast: number;
+    deltaPct: number | null;
+    confidence: string;
+  }>;
+};
+
+export type AnomalyCenterPayload = {
+  summary: {
+    scannedParts: number;
+    surfacedAlerts: number;
+    structuralBreaks: number;
+    highRiskForecasts: number;
+    lowConfidenceForecasts: number;
+  };
+  regimeBreakdown: Array<{
+    label: string;
+    count: number;
+  }>;
+  records: Array<{
+    part: string;
+    partDescription: string | null;
+    historyMonths: number;
+    latestMonth: string;
+    previousMonth: string | null;
+    latestActual: number;
+    previousActual: number;
+    deltaPct: number | null;
+    recent3MonthAverage: number;
+    nextForecast: number;
+    forecastDeltaPct: number | null;
+    anomalyScore: number;
+    regime: string;
+    regimeCode: string;
+    regimeSeverity: string;
+    forecastRisk: string;
+    confidence: string;
+    wape: number | null;
+    bias: number | null;
+    modelName: string;
+    preprocessing: string;
+    adjustedMonths: number;
+    evidence: string[];
+    anomalies: Array<{
+      month: string;
+      actual: number;
+      baseline: number | null;
+      deltaPct: number | null;
+      severity: string;
+    }>;
+    wholesaleSignal: {
+      available: boolean;
+      latestWholesale: number;
+      wholesaleDeltaPct: number | null;
+      expectedFromModel: number;
+      modelWape: number | null;
+      unexplainedResidualPct: number | null;
+      wholesaleContribution: number | null;
+      relationshipStrength: string;
+    } | null;
+    brandDrivers: Array<{
+      name: string;
+      latest: number;
+      previous: number;
+      delta: number;
+    }>;
+    modelDrivers: Array<{
+      name: string;
+      latest: number;
+      previous: number;
+      delta: number;
+    }>;
+  }>;
+  filters: {
+    search: string;
+    brand: string[];
+    model: string[];
+    modelYear: string[];
+    part: string[];
+    startDate: string;
+    endDate: string;
+  };
 };
 
 export const defaultTableState: TableState = {
@@ -183,6 +357,94 @@ export function chartOption(title: string, labels: string[], values: number[], k
         fontFamily: "Manrope, sans-serif",
       },
     },
+  };
+}
+
+export function forecastChartOption(payload: ForecastPayload) {
+  const labels = payload.series.map((point) => point.month);
+  const actual = payload.series.map((point) => point.actual);
+  const forecast = payload.series.map((point) => point.forecast);
+  const lower = payload.series.map((point) => point.lower);
+  const upper = payload.series.map((point) => point.upper);
+
+  return {
+    backgroundColor: "transparent",
+    animationDuration: 600,
+    grid: { left: 48, right: 24, top: 56, bottom: 40 },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: "#101725",
+      borderWidth: 0,
+      textStyle: { color: "#f8fbff" },
+    },
+    legend: {
+      right: 12,
+      top: 8,
+      textStyle: { color: "#607087" },
+    },
+    xAxis: {
+      type: "category",
+      data: labels,
+      axisLine: { lineStyle: { color: "#d7e2ef" } },
+      axisLabel: { color: "#607087" },
+    },
+    yAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: "#e5ecf5" } },
+      axisLabel: { color: "#607087" },
+    },
+    title: {
+      text: "Part-level demand forecast",
+      left: 0,
+      top: 8,
+      textStyle: {
+        color: "#122033",
+        fontWeight: 700,
+        fontSize: 15,
+        fontFamily: "Manrope, sans-serif",
+      },
+    },
+    series: [
+      {
+        name: "Actual",
+        type: "line",
+        data: actual,
+        smooth: true,
+        symbolSize: 7,
+        itemStyle: { color: "#2054f4" },
+        lineStyle: { color: "#2054f4", width: 3 },
+      },
+      {
+        name: "Forecast",
+        type: "line",
+        data: forecast,
+        smooth: true,
+        symbolSize: 7,
+        itemStyle: { color: "#f97316" },
+        lineStyle: { color: "#f97316", width: 3, type: "dashed" },
+      },
+      {
+        name: "Lower bound",
+        type: "line",
+        data: lower,
+        symbol: "none",
+        lineStyle: { opacity: 0 },
+        stack: "forecast-band",
+      },
+      {
+        name: "Forecast range",
+        type: "line",
+        data: upper.map((value, index) => {
+          const floor = lower[index];
+          if (value === null || floor === null) return null;
+          return value - floor;
+        }),
+        symbol: "none",
+        lineStyle: { opacity: 0 },
+        areaStyle: { color: "rgba(249, 115, 22, 0.14)" },
+        stack: "forecast-band",
+      },
+    ],
   };
 }
 
