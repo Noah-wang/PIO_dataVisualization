@@ -270,6 +270,28 @@ export type AnomalyCenterPayload = {
   };
 };
 
+export type PivotDimension = { key: string; label: string };
+export type PivotMeasure = { key: string; label: string };
+
+export type PivotPayload = {
+  rowFields: string[];
+  colFields: string[];
+  measure: string;
+  agg: string;
+  availableDimensions: PivotDimension[];
+  availableMeasures: PivotMeasure[];
+  rowKeys: string[];
+  colKeys: string[];
+  cells: Record<string, Record<string, number>>;
+  rowTotals: Record<string, number>;
+  colTotals: Record<string, number>;
+  grandTotal: number;
+  rowCount: number;
+  colCount: number;
+  truncated: boolean;
+  measureUnit: "currency" | "number";
+};
+
 export const defaultTableState: TableState = {
   search: "",
   brand: [],

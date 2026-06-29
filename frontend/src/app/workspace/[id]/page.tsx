@@ -32,6 +32,7 @@ import type { TableColumnsType, TablePaginationConfig } from "antd";
 import type { FilterValue, SorterResult } from "antd/es/table/interface";
 import ReactECharts from "echarts-for-react";
 import { useEffect, useState, use } from "react";
+import type { CSSProperties, DragEvent as ReactDragEvent } from "react";
 import dayjs from "dayjs";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -40,6 +41,7 @@ import {
   AnomalyCenterPayload,
   API_BASE_URL,
   ForecastPayload,
+  PivotPayload,
   WorkbookMeta,
   WorkspacePayload,
   TableState,
@@ -82,6 +84,13 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
   const [forecastLoading, setForecastLoading] = useState(false);
   const [forecastPart, setForecastPart] = useState("");
   const [forecastHorizon, setForecastHorizon] = useState(3);
+  const [pivotData, setPivotData] = useState<PivotPayload | null>(null);
+  const [pivotLoading, setPivotLoading] = useState(false);
+  const [pivotRows, setPivotRows] = useState<string[]>(["part"]);
+  const [pivotCols, setPivotCols] = useState<string[]>(["month"]);
+  const [pivotMeasure, setPivotMeasure] = useState("quantity");
+  const [pivotAgg, setPivotAgg] = useState("sum");
+  const [pivotDragField, setPivotDragField] = useState<string | null>(null);
 
   // Save custom column order to localStorage on change
   useEffect(() => {
@@ -309,6 +318,87 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
     } finally {
       setAnomalyLoading(false);
     }
+  }
+
+  async function loadPivotData(
+    sheetName: string,
+    state: TableState,
+    rows = pivotRows,
+    cols = pivotCols,
+    measure = pivotMeasure,
+    agg = pivotAgg,
+  ) {
+    const params = buildWorkspaceParams({ ...state, page: 1, pageSize: 50 });
+    params.delete("page");
+    params.delete("page_size");
+    params.delete("sort_field");
+    params.delete("sort_order");
+    rows.forEach((field) => params.append("rows", field));
+    cols.forEach((field) => params.append("cols", field));
+    params.set("measure", measure);
+    params.set("agg", agg);
+
+    setPivotLoading(true);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/workbooks/${id}/sheets/${encodeURIComponent(sheetName)}/pivot?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error((await response.json()).detail ?? "Failed to build pivot table.");
+      }
+      const payload = (await response.json()) as PivotPayload;
+      setPivotData(payload);
+    } catch (err) {
+      messageApi.error(err instanceof Error ? err.message : "Failed to build pivot table.");
+    } finally {
+      setPivotLoading(false);
+    }
+  }
+
+  // Rebuild the pivot whenever its configuration changes (and the sheet is ready).
+  useEffect(() => {
+    if (!workspace) return;
+    loadPivotData(workspace.sheetName, tableState, pivotRows, pivotCols, pivotMeasure, pivotAgg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace?.sheetName, pivotRows, pivotCols, pivotMeasure, pivotAgg]);
+
+  function movePivotField(field: string, target: "rows" | "cols" | "available") {
+    setPivotRows((prev) => prev.filter((f) => f !== field));
+    setPivotCols((prev) => prev.filter((f) => f !== field));
+    if (target === "rows") {
+      setPivotRows((prev) => [...prev.filter((f) => f !== field), field]);
+    } else if (target === "cols") {
+      setPivotCols((prev) => [...prev.filter((f) => f !== field), field]);
+    }
+  }
+
+  function exportPivotCsv() {
+    if (!pivotData || pivotData.rowKeys.length === 0) return;
+    const dimLabel = (key: string) =>
+      pivotData.availableDimensions.find((d) => d.key === key)?.label ?? key;
+    const rowHeader = pivotData.rowFields.map(dimLabel).join(" / ") || "Row";
+    const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const header = [escape(rowHeader), ...pivotData.colKeys.map(escape), "Total"].join(",");
+    const lines = pivotData.rowKeys.map((rk) => {
+      const cells = pivotData.colKeys.map((ck) => {
+        const value = pivotData.cells[rk]?.[ck];
+        return value === undefined ? "" : String(value);
+      });
+      return [escape(rk), ...cells, String(pivotData.rowTotals[rk] ?? "")].join(",");
+    });
+    const totalsRow = [
+      "Total",
+      ...pivotData.colKeys.map((ck) => String(pivotData.colTotals[ck] ?? "")),
+      String(pivotData.grandTotal),
+    ].join(",");
+    const csv = [header, ...lines, totalsRow].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "pio-pivot.csv";
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   function handleChartFilterChange(updates: Partial<TableState>) {
@@ -723,6 +813,256 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
                         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No auto insights available for this slice yet." />
                       )}
                     </Card>
+                  </div>
+                ),
+              },
+              {
+                key: "pivot",
+                label: "Pivot Table",
+                children: (
+                  <div className="tab-stack">
+                    {(() => {
+                      const dims = pivotData?.availableDimensions ?? [];
+                      const dimLabel = (key: string) =>
+                        dims.find((d) => d.key === key)?.label ?? key;
+                      const usedFields = new Set([...pivotRows, ...pivotCols]);
+                      const availableFields = dims.filter((d) => !usedFields.has(d.key));
+                      const measures = pivotData?.availableMeasures ?? [
+                        { key: "quantity", label: "Installation quantity" },
+                        { key: "revenue", label: "Sales revenue" },
+                        { key: "records", label: "Record count" },
+                      ];
+                      const isCurrency = pivotData?.measureUnit === "currency";
+                      const fmt = (value: number | undefined) =>
+                        value === undefined ? "—" : formatMetric(value, isCurrency);
+
+                      const zoneStyle: CSSProperties = {
+                        minHeight: 64,
+                        border: "1px dashed #cdd9e8",
+                        borderRadius: 10,
+                        background: "#f7fafd",
+                        padding: 10,
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 6,
+                        alignContent: "flex-start",
+                      };
+                      const onZoneDrop = (target: "rows" | "cols" | "available") => (
+                        event: ReactDragEvent
+                      ) => {
+                        event.preventDefault();
+                        if (pivotDragField) {
+                          movePivotField(pivotDragField, target);
+                          setPivotDragField(null);
+                        }
+                      };
+                      const allowDrop = (event: ReactDragEvent) => event.preventDefault();
+                      const renderTag = (
+                        key: string,
+                        zone: "available" | "rows" | "cols"
+                      ) => (
+                        <Tag
+                          key={key}
+                          draggable
+                          onDragStart={() => setPivotDragField(key)}
+                          closable={zone !== "available"}
+                          onClose={(e) => {
+                            e.preventDefault();
+                            movePivotField(key, "available");
+                          }}
+                          onClick={() => {
+                            if (zone === "available") movePivotField(key, "rows");
+                            else if (zone === "rows") movePivotField(key, "cols");
+                            else movePivotField(key, "available");
+                          }}
+                          style={{
+                            cursor: "grab",
+                            padding: "4px 10px",
+                            fontSize: 13,
+                            borderRadius: 16,
+                            userSelect: "none",
+                          }}
+                          color={zone === "available" ? undefined : "blue"}
+                        >
+                          {dimLabel(key)}
+                        </Tag>
+                      );
+
+                      const columns: TableColumnsType<Record<string, string | number>> = [
+                        {
+                          title: pivotRows.map(dimLabel).join(" / ") || "(drag a field to Rows)",
+                          dataIndex: "__row",
+                          key: "__row",
+                          fixed: "left",
+                          width: 220,
+                          render: (value: string) => <strong>{value}</strong>,
+                        },
+                        ...(pivotData?.colKeys ?? []).map((ck) => ({
+                          title: ck,
+                          dataIndex: ck,
+                          key: ck,
+                          align: "right" as const,
+                          width: 120,
+                          render: (value: number | undefined) => fmt(value),
+                        })),
+                        {
+                          title: "Total",
+                          dataIndex: "__total",
+                          key: "__total",
+                          align: "right" as const,
+                          fixed: "right",
+                          width: 130,
+                          render: (value: number) => <strong>{fmt(value)}</strong>,
+                        },
+                      ];
+                      const dataSource = (pivotData?.rowKeys ?? []).map((rk) => {
+                        const record: Record<string, string | number> = {
+                          key: rk,
+                          __row: rk,
+                          __total: pivotData?.rowTotals[rk] ?? 0,
+                        };
+                        (pivotData?.colKeys ?? []).forEach((ck) => {
+                          const value = pivotData?.cells[rk]?.[ck];
+                          if (value !== undefined) record[ck] = value;
+                        });
+                        return record;
+                      });
+
+                      return (
+                        <>
+                          <Card className="content-card major-tab-intro">
+                            <div className="major-tab-header">
+                              <div>
+                                <div className="eyebrow" style={{ marginBottom: 8 }}>Pivot Table</div>
+                                <Paragraph className="workspace-copy" style={{ marginBottom: 0 }}>
+                                  Drag dimensions onto Rows or Columns, pick a measure, and read the cross-tab. Aggregation runs server-side, honoring the filters above. Click a chip to move it; drag for fine control.
+                                </Paragraph>
+                              </div>
+                            </div>
+                          </Card>
+
+                          <Card className="content-card">
+                            <Row gutter={[14, 14]}>
+                              <Col xs={24} md={8}>
+                                <div className="eyebrow" style={{ marginBottom: 6 }}>Available fields</div>
+                                <div
+                                  style={zoneStyle}
+                                  onDrop={onZoneDrop("available")}
+                                  onDragOver={allowDrop}
+                                >
+                                  {availableFields.length === 0 ? (
+                                    <Text type="secondary" style={{ fontSize: 12 }}>All fields in use</Text>
+                                  ) : (
+                                    availableFields.map((d) => renderTag(d.key, "available"))
+                                  )}
+                                </div>
+                              </Col>
+                              <Col xs={24} md={8}>
+                                <div className="eyebrow" style={{ marginBottom: 6 }}>Rows</div>
+                                <div style={zoneStyle} onDrop={onZoneDrop("rows")} onDragOver={allowDrop}>
+                                  {pivotRows.length === 0 ? (
+                                    <Text type="secondary" style={{ fontSize: 12 }}>Drop a field here</Text>
+                                  ) : (
+                                    pivotRows.map((f) => renderTag(f, "rows"))
+                                  )}
+                                </div>
+                              </Col>
+                              <Col xs={24} md={8}>
+                                <div className="eyebrow" style={{ marginBottom: 6 }}>Columns</div>
+                                <div style={zoneStyle} onDrop={onZoneDrop("cols")} onDragOver={allowDrop}>
+                                  {pivotCols.length === 0 ? (
+                                    <Text type="secondary" style={{ fontSize: 12 }}>Drop a field here</Text>
+                                  ) : (
+                                    pivotCols.map((f) => renderTag(f, "cols"))
+                                  )}
+                                </div>
+                              </Col>
+                            </Row>
+
+                            <Space wrap style={{ marginTop: 16 }}>
+                              <span>
+                                <Text type="secondary" style={{ marginRight: 8 }}>Measure</Text>
+                                <Select
+                                  value={pivotMeasure}
+                                  style={{ width: 200 }}
+                                  onChange={setPivotMeasure}
+                                  options={measures.map((m) => ({ label: m.label, value: m.key }))}
+                                />
+                              </span>
+                              <span>
+                                <Text type="secondary" style={{ marginRight: 8 }}>Aggregation</Text>
+                                <Select
+                                  value={pivotMeasure === "records" ? "count" : pivotAgg}
+                                  style={{ width: 150 }}
+                                  disabled={pivotMeasure === "records"}
+                                  onChange={setPivotAgg}
+                                  options={[
+                                    { label: "Sum", value: "sum" },
+                                    { label: "Average", value: "avg" },
+                                    { label: "Count", value: "count" },
+                                  ]}
+                                />
+                              </span>
+                              <Button
+                                onClick={exportPivotCsv}
+                                disabled={!pivotData || pivotData.rowKeys.length === 0}
+                              >
+                                Export CSV
+                              </Button>
+                            </Space>
+                          </Card>
+
+                          {pivotData?.truncated && (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              message="Large result truncated to the top rows/columns by total contribution. Add a filter to narrow it down."
+                            />
+                          )}
+
+                          <Card className="content-card">
+                            <Space wrap style={{ marginBottom: 12 }}>
+                              <Tag color="blue">Rows: {pivotData?.rowCount ?? 0}</Tag>
+                              <Tag color="blue">Columns: {pivotData?.colCount ?? 0}</Tag>
+                              <Tag color="geekblue">Grand total: {fmt(pivotData?.grandTotal)}</Tag>
+                            </Space>
+                            <Spin spinning={pivotLoading}>
+                              {pivotData && pivotData.rowKeys.length > 0 ? (
+                                <Table
+                                  size="small"
+                                  columns={columns}
+                                  dataSource={dataSource}
+                                  pagination={false}
+                                  scroll={{ x: "max-content", y: 520 }}
+                                  summary={() => (
+                                    <Table.Summary fixed>
+                                      <Table.Summary.Row>
+                                        <Table.Summary.Cell index={0}>
+                                          <strong>Total</strong>
+                                        </Table.Summary.Cell>
+                                        {(pivotData?.colKeys ?? []).map((ck, i) => (
+                                          <Table.Summary.Cell index={i + 1} key={ck} align="right">
+                                            {fmt(pivotData?.colTotals[ck])}
+                                          </Table.Summary.Cell>
+                                        ))}
+                                        <Table.Summary.Cell index={(pivotData?.colKeys.length ?? 0) + 1} align="right">
+                                          <strong>{fmt(pivotData?.grandTotal)}</strong>
+                                        </Table.Summary.Cell>
+                                      </Table.Summary.Row>
+                                    </Table.Summary>
+                                  )}
+                                />
+                              ) : (
+                                <Empty
+                                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                  description="Drag at least one field onto Rows or Columns to build a pivot."
+                                />
+                              )}
+                            </Spin>
+                          </Card>
+                        </>
+                      );
+                    })()}
                   </div>
                 ),
               },
