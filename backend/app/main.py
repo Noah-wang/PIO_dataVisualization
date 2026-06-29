@@ -430,6 +430,7 @@ def get_pivot(
         col_fields=cols,
         measure=measure,
         agg=agg,
+        wide_start_year=_infer_start_year(session, exclude_sheet=sheet_name),
     )
 
 
@@ -1303,6 +1304,27 @@ def _build_anomaly_center_payload(
         "endDate": end_date,
     }
     return anomaly_center
+
+
+def _infer_start_year(session: WorkbookSession, exclude_sheet: str | None = None) -> int | None:
+    """First calendar year seen in a sibling sheet that has a real date field.
+
+    Used to label the month columns of wide wholesale/fleet matrices (whose own
+    year headers are lost during parsing) with real years.
+    """
+    for candidate in session.sheet_names:
+        if exclude_sheet and candidate == exclude_sheet:
+            continue
+        try:
+            other = _get_bundle(session, candidate)
+        except Exception:
+            continue
+        date_col = other.roles.get("date")
+        if date_col and date_col in other.date_candidates:
+            parsed = other.date_candidates[date_col].dropna()
+            if not parsed.empty:
+                return int(parsed.min().year)
+    return None
 
 
 def _find_wholesale_bundle(session: WorkbookSession, exclude_sheet: str | None = None) -> DatasetBundle | None:

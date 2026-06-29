@@ -348,6 +348,25 @@ export default function WorkspacePage({ params }: WorkspacePageProps) {
       }
       const payload = (await response.json()) as PivotPayload;
       setPivotData(payload);
+
+      // Reconcile the dragged fields with what this sheet actually supports.
+      // Switching to a differently-shaped sheet (e.g. the wide wholesale matrix)
+      // can leave stale fields like "part" that no longer exist here.
+      const validKeys = new Set(payload.availableDimensions.map((d) => d.key));
+      let nextRows = rows.filter((f) => validKeys.has(f));
+      let nextCols = cols.filter((f) => validKeys.has(f));
+      if (rows.length > 0 && nextRows.length === 0 && payload.availableDimensions.length > 0) {
+        const taken = new Set(nextCols);
+        const fallback =
+          payload.availableDimensions.find(
+            (d) => !taken.has(d.key) && d.key !== "month" && d.key !== "year"
+          ) ?? payload.availableDimensions.find((d) => !taken.has(d.key));
+        if (fallback) nextRows = [fallback.key];
+      }
+      if (nextRows.join("|") !== rows.join("|") || nextCols.join("|") !== cols.join("|")) {
+        setPivotRows(nextRows);
+        setPivotCols(nextCols);
+      }
     } catch (err) {
       messageApi.error(err instanceof Error ? err.message : "Failed to build pivot table.");
     } finally {
