@@ -306,6 +306,11 @@ export const defaultTableState: TableState = {
   sortOrder: "",
 };
 
+export function compactNumber(value: number) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
 export function formatMetric(value: number | null, currency = false) {
   if (value === null || Number.isNaN(value)) return "N/A";
   return currency
@@ -353,7 +358,7 @@ export function chartOption(title: string, labels: string[], values: number[], k
     yAxis: {
       type: "value",
       splitLine: { lineStyle: { color: "#e5ecf5" } },
-      axisLabel: { color: "#607087" },
+      axisLabel: { color: "#607087", formatter: (value: number) => compactNumber(value) },
     },
     series: [
       kind === "bar"
@@ -413,7 +418,7 @@ export function forecastChartOption(payload: ForecastPayload) {
     yAxis: {
       type: "value",
       splitLine: { lineStyle: { color: "#e5ecf5" } },
-      axisLabel: { color: "#607087" },
+      axisLabel: { color: "#607087", formatter: (value: number) => compactNumber(value) },
     },
     title: {
       text: "Part-level demand forecast",
