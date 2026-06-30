@@ -28,6 +28,7 @@ from pio_platform.forecasting import (
     preprocess_history,
     select_best_model,
 )
+from pio_platform.pivot import build_pivot
 from pio_platform.profiling import build_column_profile, build_insights, compute_kpis
 
 
@@ -386,6 +387,50 @@ def get_anomaly_center(
         part=part,
         start_date=start_date,
         end_date=end_date,
+    )
+
+
+@app.get("/api/workbooks/{workbook_id}/sheets/{sheet_name}/pivot")
+def get_pivot(
+    workbook_id: str,
+    sheet_name: str,
+    rows: list[str] = Query(default=[]),
+    cols: list[str] = Query(default=[]),
+    measure: str = Query(default="quantity"),
+    agg: str = Query(default="sum"),
+    search: str = Query(default=""),
+    brand: list[str] = Query(default=[]),
+    model: list[str] = Query(default=[]),
+    model_year: list[str] = Query(default=[]),
+    part: list[str] = Query(default=[]),
+    model_query: str = Query(default=""),
+    part_query: str = Query(default=""),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+) -> dict[str, Any]:
+    session = _get_session(workbook_id)
+    bundle = _get_bundle(session, sheet_name)
+    filtered = _apply_filters(
+        bundle,
+        search=search,
+        brand=brand,
+        model=model,
+        model_year=model_year,
+        part=part,
+        model_query=model_query,
+        part_query=part_query,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return build_pivot(
+        filtered_df=filtered,
+        roles=bundle.roles,
+        date_candidates=bundle.date_candidates,
+        row_fields=rows,
+        col_fields=cols,
+        measure=measure,
+        agg=agg,
+        wide_start_year=_infer_start_year(session, exclude_sheet=sheet_name),
     )
 
 
@@ -1259,6 +1304,27 @@ def _build_anomaly_center_payload(
         "endDate": end_date,
     }
     return anomaly_center
+
+
+def _infer_start_year(session: WorkbookSession, exclude_sheet: str | None = None) -> int | None:
+    """First calendar year seen in a sibling sheet that has a real date field.
+
+    Used to label the month columns of wide wholesale/fleet matrices (whose own
+    year headers are lost during parsing) with real years.
+    """
+    for candidate in session.sheet_names:
+        if exclude_sheet and candidate == exclude_sheet:
+            continue
+        try:
+            other = _get_bundle(session, candidate)
+        except Exception:
+            continue
+        date_col = other.roles.get("date")
+        if date_col and date_col in other.date_candidates:
+            parsed = other.date_candidates[date_col].dropna()
+            if not parsed.empty:
+                return int(parsed.min().year)
+    return None
 
 
 def _find_wholesale_bundle(session: WorkbookSession, exclude_sheet: str | None = None) -> DatasetBundle | None:

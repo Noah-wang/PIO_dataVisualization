@@ -270,6 +270,28 @@ export type AnomalyCenterPayload = {
   };
 };
 
+export type PivotDimension = { key: string; label: string };
+export type PivotMeasure = { key: string; label: string };
+
+export type PivotPayload = {
+  rowFields: string[];
+  colFields: string[];
+  measure: string;
+  agg: string;
+  availableDimensions: PivotDimension[];
+  availableMeasures: PivotMeasure[];
+  rowKeys: string[];
+  colKeys: string[];
+  cells: Record<string, Record<string, number>>;
+  rowTotals: Record<string, number>;
+  colTotals: Record<string, number>;
+  grandTotal: number;
+  rowCount: number;
+  colCount: number;
+  truncated: boolean;
+  measureUnit: "currency" | "number";
+};
+
 export const defaultTableState: TableState = {
   search: "",
   brand: [],
@@ -283,6 +305,11 @@ export const defaultTableState: TableState = {
   sortField: "",
   sortOrder: "",
 };
+
+export function compactNumber(value: number) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
 
 export function formatMetric(value: number | null, currency = false) {
   if (value === null || Number.isNaN(value)) return "N/A";
@@ -331,7 +358,7 @@ export function chartOption(title: string, labels: string[], values: number[], k
     yAxis: {
       type: "value",
       splitLine: { lineStyle: { color: "#e5ecf5" } },
-      axisLabel: { color: "#607087" },
+      axisLabel: { color: "#607087", formatter: (value: number) => compactNumber(value) },
     },
     series: [
       kind === "bar"
@@ -391,7 +418,7 @@ export function forecastChartOption(payload: ForecastPayload) {
     yAxis: {
       type: "value",
       splitLine: { lineStyle: { color: "#e5ecf5" } },
-      axisLabel: { color: "#607087" },
+      axisLabel: { color: "#607087", formatter: (value: number) => compactNumber(value) },
     },
     title: {
       text: "Part-level demand forecast",
