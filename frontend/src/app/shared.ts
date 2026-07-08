@@ -57,6 +57,66 @@ export type WorkspacePayload = {
       completenessRate?: number;
     };
   };
+  companyAnalysis?: {
+    pipeline: Array<{
+      step: string;
+      status: string;
+      detail: string;
+    }>;
+    dictionary: Array<{
+      field: string;
+      source: string;
+      businessName: string;
+      definition: string;
+      status: string;
+      evidence: string;
+      availableInCurrentSheet: boolean;
+    }>;
+    keyMetrics: {
+      totalRevenue: number | null;
+      totalQuantity: number | null;
+      averageAccessoryPrice: number | null;
+      wholesaleUnits: number | null;
+      pnvw: number | null;
+      accessoryUnitsPerVehicle: number | null;
+    };
+    joinValidation: {
+      modelCode: {
+        salesCodeCount: number;
+        wholesaleCodeCount: number;
+        matchedCodeCount: number;
+        coveragePct: number | null;
+        unmatchedSalesCodes: string[];
+      };
+      brand: {
+        rawCounts: Record<string, number>;
+        mapping: Record<string, string>;
+        recognizedPct: number | null;
+      };
+      unitPrice: {
+        validRows: number;
+        zeroQuantityRows: number;
+        negativeQuantityRows: number;
+        negativeRevenueRows: number;
+        median: number | null;
+        p05: number | null;
+        p95: number | null;
+      };
+    };
+    eda: {
+      monthly: Array<{
+        month: string;
+        revenue: number | null;
+        quantity: number | null;
+        wholesaleUnits: number | null;
+        pnvw: number | null;
+        accessoryUnitsPerVehicle: number | null;
+      }>;
+      topModelCodes: Array<{ name: string; value: number | null }>;
+      topParts: Array<{ name: string; value: number | null }>;
+      notes: string[];
+    };
+  };
   table: {
     columns: Array<{ key: string; title: string; role: string; type: string }>;
     rows: Array<Record<string, string | number | null>>;
