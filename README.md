@@ -63,6 +63,13 @@ V1 专注于第一个核心业务需求：**从 Excel 工作簿中提取、清�
 - 服务端聚合，沿用 Data Workspace 的全部过滤条件
 - 自动带行 / 列 / 总计，可一键导出当前透视结果为 CSV
 
+### 🧪 Pipeline & EDA（数据管道与探索性分析）
+- 位于 Data Workspace 下，用于在进入 Forecast Center 和 AI Analyst 之前检查数据是否完整、可连接、可分析
+- 展示数据管道状态、字段定义验证、model-code bridge 覆盖率、EDA notes、月度趋势和排行视图
+- 关键字段定义包括：`PIS_SERI` 对接 wholesale 表中的 `Model Code`，`PIS_CMP_KND` 中 `K` 表示 KUS、`H` 表示 HMA + GMA
+- 派生指标包括：PNVW、wholesale denominator、average accessory price、accessory units per vehicle
+- EDA 数据通过可选参数按需加载，不改变 Forecast Center、AI Analyst、Pivot Table 的原有数据路径
+
 ---
 
 ## 技术栈
@@ -162,6 +169,7 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 | `GET` | `/api/health` | 健康检查 |
 | `POST` | `/api/workbooks/upload` | 上传 Excel 文件，返回工作区完整数据 |
 | `GET` | `/api/workbooks/{id}/sheets/{sheet}` | 获取指定工作表的分页数据（支持过滤、排序） |
+| `GET` | `/api/workbooks/{id}/sheets/{sheet}?include_company_analysis=true` | 按需返回 Pipeline & EDA 的 companyAnalysis 数据；默认请求不计算该分析层 |
 | `GET` | `/api/workbooks/{id}/sheets/{sheet}/pivot` | 服务端透视聚合（rows / cols / measure / agg + 过滤条件） |
 | `GET` | `/api/workbooks/{id}/sheets/{sheet}/export.csv` | 导出当前过滤切片为 CSV |
 
@@ -242,6 +250,13 @@ The platform has been tested against a real-world dataset of approximately **199
 - Switch the measure between installation quantity, sales revenue, and record count; aggregate by sum / average / count
 - Server-side aggregation that honors every Data Workspace filter
 - Row, column, and grand totals included; export the current pivot to CSV in one click
+
+### 🧪 Pipeline & EDA Tab
+- Lives under Data Workspace and checks whether the uploaded data is complete, linkable, and analysis-ready before Forecast Center and AI Analyst workflows
+- Shows pipeline status, field-definition validation, model-code bridge coverage, EDA notes, monthly trends, and ranking views
+- Key definitions include: `PIS_SERI` maps to wholesale `Model Code`, and `PIS_CMP_KND` uses `K` for KUS and `H` for HMA + GMA
+- Derived metrics include PNVW, wholesale denominator, average accessory price, and accessory units per vehicle
+- EDA data is loaded on demand through an optional parameter, leaving Forecast Center, AI Analyst, and Pivot Table data paths unchanged
 
 ---
 
@@ -345,6 +360,7 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 | `GET` | `/api/health` | Health check |
 | `POST` | `/api/workbooks/upload` | Upload an Excel file; returns the full workspace payload |
 | `GET` | `/api/workbooks/{id}/sheets/{sheet}` | Fetch paginated sheet data with filter and sort support |
+| `GET` | `/api/workbooks/{id}/sheets/{sheet}?include_company_analysis=true` | Fetch the optional Pipeline & EDA `companyAnalysis` payload on demand; default requests do not compute this layer |
 | `GET` | `/api/workbooks/{id}/sheets/{sheet}/pivot` | Server-side pivot aggregation (rows / cols / measure / agg + filters) |
 | `GET` | `/api/workbooks/{id}/sheets/{sheet}/export.csv` | Export the current filtered slice as CSV |
 
